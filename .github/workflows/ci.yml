@@ -44,4 +44,18 @@ jobs:
           if [ "${{ matrix.name }}" = "linux-arm64" ]; then extra="-DSSE2NEON_DIR=$RUNNER_TEMP/sse2neon"; fi
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DVULKAN_HEADERS_DIR="$RUNNER_TEMP/vk-headers/include" $extra
       - name: Build
-        run: cmake --build build --config Release --parallel
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cmake --build build --config Release --parallel
+          else
+            # keep going after the first error so one run shows every problem, and surface them as one annotation
+            set +e
+            cmake --build build --parallel -- -k 2>&1 | tee build.log
+            rc=${PIPESTATUS[0]}
+            if [ $rc -ne 0 ]; then
+              msg=$(grep -E "error|undefined reference|Error [0-9]" build.log | head -150 | cut -c1-260 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+              echo "::error title=build errors (${{ matrix.name }})::$msg"
+            fi
+            exit $rc
+          fi
