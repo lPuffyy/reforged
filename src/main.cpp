@@ -187,6 +187,9 @@ static LONG WINAPI FatalFilter(EXCEPTION_POINTERS* ep) {
 #endif
 #endif
 
+// Exit without running static destructors: the device and audio threads started during init are still running and would race them.
+[[noreturn]] static void Quit(int code) { fflush(stdout); fflush(stderr); _Exit(code); }
+
 int main(int argc, char** argv) {
 #ifdef _WIN32
   SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
@@ -204,7 +207,7 @@ int main(int argc, char** argv) {
 #else
   plat::InstallCrashHandler(PortableCrash);
 #endif
-  if (strcmp(iso, "none") != 0 && !DiscOpen(iso)) { Log("cannot open disc image %s", iso); return 1; }   // "none": no disc in the drive (e.g. running the dashboard)
+  if (strcmp(iso, "none") != 0 && !DiscOpen(iso)) { Log("cannot open disc image %s", iso); Quit(1); }   // "none": no disc in the drive (e.g. running the dashboard)
   XbeInfo info{}; char err[256];
   extern bool KernelContigOk();
   bool loaded = KernelContigOk() ? XbeLoad(xbe, &info, err, sizeof err) : (snprintf(err, sizeof err, "cannot map physical RAM at 0x80000000"), false);
@@ -219,7 +222,7 @@ int main(int argc, char** argv) {
       if (CreateProcessA(nullptr, GetCommandLineA(), nullptr, nullptr, TRUE, 0, nullptr, nullptr, &si, &pi)) { WaitForSingleObject(pi.hProcess, INFINITE); DWORD code = 0; GetExitCodeProcess(pi.hProcess, &code); return (int)code; }
     }
 #endif
-    return 1;
+    Quit(1);
   }
   // Patch the kernel thunk table: each entry 0x80000000|ordinal -> address of our implementation / exported variable.
   uint32_t* thunk = (uint32_t*)G(info.kernelThunk); int n = 0, missing = 0;
