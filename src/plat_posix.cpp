@@ -166,6 +166,11 @@ uint32_t Wait(Obj* o, uint32_t ms) { return WaitMany(&o, 1, false, ms) == 0 ? kW
 // ---- virtual memory ----
 static std::mutex& VmM() { static std::mutex m; return m; }
 static std::map<uintptr_t, size_t>& Reservations() { static std::map<uintptr_t, size_t> r; return r; }
+// Windows rounds commit/protect/decommit ranges outward to whole pages; mprotect/mmap require the start to be page aligned, so do the same here.
+static void PageRound(void*& at, size_t& size) {
+  uintptr_t pg = (uintptr_t)sysconf(_SC_PAGESIZE), a = (uintptr_t)at, start = a & ~(pg - 1), end = (a + size + pg - 1) & ~(pg - 1);
+  at = (void*)start; size = (size_t)(end - start);
+}
 static int ProtFlags(int p) { int f = 0; if (p & kProtRead) f |= PROT_READ; if (p & kProtWrite) f |= PROT_WRITE | PROT_READ; if (p & kProtExec) f |= PROT_EXEC; return f; }
 void* VmReserve(void* at, size_t size) {
   void* p = mmap(at, size, PROT_NONE, MAP_PRIVATE | MAP_ANON | MAP_NORESERVE, -1, 0);
@@ -174,10 +179,10 @@ void* VmReserve(void* at, size_t size) {
   std::lock_guard<std::mutex> l(VmM()); Reservations()[(uintptr_t)p] = size;
   return p;
 }
-bool VmCommit(void* at, size_t size, int prot) { return mprotect(at, size, ProtFlags(prot)) == 0; }
-bool VmProtect(void* at, size_t size, int prot) { return mprotect(at, size, ProtFlags(prot)) == 0; }
+bool VmCommit(void* at, size_t size, int prot) { PageRound(at, size); return mprotect(at, size, ProtFlags(prot)) == 0; }
+bool VmProtect(void* at, size_t size, int prot) { PageRound(at, size); return mprotect(at, size, ProtFlags(prot)) == 0; }
 bool VmRelease(void* at, size_t size) {
-  if (size) return mmap(at, size, PROT_NONE, MAP_FIXED | MAP_PRIVATE | MAP_ANON | MAP_NORESERVE, -1, 0) != MAP_FAILED;   // decommit: pages read as zero when committed again
+  if (size) { PageRound(at, size); return mmap(at, size, PROT_NONE, MAP_FIXED | MAP_PRIVATE | MAP_ANON | MAP_NORESERVE, -1, 0) != MAP_FAILED; }   // decommit: pages read as zero when committed again
   std::lock_guard<std::mutex> l(VmM()); auto it = Reservations().find((uintptr_t)at); if (it == Reservations().end()) return false;
   munmap(at, it->second); Reservations().erase(it); return true;
 }
