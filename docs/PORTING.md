@@ -14,14 +14,16 @@
   app shell elsewhere), `net_sock.h` (Winsock vs BSD sockets).
 - **Portable build**: `CMakeLists.txt` (`LIFT_NO_NATIVE`, `LIFT_EXPLICIT_MMIO`); CI builds it on Windows x64, Linux x64 and Linux arm64.
 
+- **Verified in CI** (Windows x64, Linux x64, Linux arm64): the runtime builds and links, `tests/plat_test.cpp` (95 behavioural checks of the
+  platform layer) passes, and the runtime starts, maps the guest address space and exits cleanly with no game present.
+
 ## Next (in order)
-1. **Fix what the first Linux/arm64 CI runs find** (the POSIX layer has only been written, not yet compiled on a real POSIX toolchain).
-2. **Make the framebuffer/PRAMIN aliases work without shared mappings** (iOS has no `memfd`; route those windows through explicit MMIO instead).
-3. **arm64 translated module**: freestanding C (no libc), host function table, built with clang + lld on the user's PC.
-4. **Companion builder**: desktop tool that takes the user's disc, runs survey + translate + compile, and injects `game.dylib` into the
+1. **Make the framebuffer/PRAMIN aliases work without shared mappings** (iOS has no `memfd`; route those windows through explicit MMIO instead).
+2. **arm64 translated module**: freestanding C (no libc), host function table, built with clang + lld on the user's PC.
+3. **Companion builder**: desktop tool that takes the user's disc, runs survey + translate + compile, and injects `game.dylib` into the
    clean app bundle.
-5. **iOS app shell**: Xcode project, Metal/MoltenVK, audio, touch/controller input, disc import. Built in CI on macOS runners (unsigned IPA).
-6. **Per-title data** (hooks, patch lists, vtable addresses) moved out of code into generated per-title files.
+4. **iOS app shell**: Xcode project, Metal/MoltenVK, audio, touch/controller input, disc import. Built in CI on macOS runners (unsigned IPA).
+5. **Per-title data** (hooks, patch lists, vtable addresses) moved out of code into generated per-title files.
 
 ## Known title-specific constants still in code (to move into per-title data)
 - `src/audio_hle.cpp`, `src/dsound_hle.cpp`: address of the stream vtable in the executable.
