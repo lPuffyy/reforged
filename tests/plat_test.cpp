@@ -100,6 +100,8 @@ static void TestVm() {
   // commit and decommit ranges that are not page aligned (the guest heap grows in 16-byte steps): the OS must round outward like VirtualAlloc does
   CHECK(plat::VmCommit((uint8_t*)r + 2 * kPage + 16, 48, plat::kProtRW)); ((uint8_t*)r)[2 * kPage + 16] = 9; ((uint8_t*)r)[2 * kPage + 63] = 10;
   CHECK(plat::VmAlloc((uint8_t*)r + 3 * kPage + 100, 200, MEM_COMMIT, PAGE_READWRITE) != nullptr); ((uint8_t*)r)[3 * kPage + 299] = 11;
+  void* x = plat::VmAlloc(nullptr, kPage, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);   // must work everywhere (the POSIX layer drops the exec bit: iOS forbids W^X)
+  CHECK(x != nullptr); if (x) { ((uint8_t*)x)[0] = 1; ((uint8_t*)x)[kPage - 1] = 2; plat::VmFree(x, 0, MEM_RELEASE); }
   void* c = plat::VmAlloc(nullptr, 3 * kPage, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE); CHECK(c != nullptr);
   if (c) { ((uint8_t*)c)[3 * kPage - 1] = 1; CHECK(plat::VmFree(c, 0, MEM_RELEASE)); }
   CHECK(plat::VmFree(r, 0, MEM_RELEASE));

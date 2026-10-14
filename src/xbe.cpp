@@ -24,7 +24,13 @@ bool XbeLoad(const char* path, XbeInfo* info, char* err, size_t errLen) {
   if (!kind) { snprintf(err, errLen, "entry point matches no known key"); return false; }
   // Reserve the whole image range at the XBE's own address: guest pointers are host pointers.
   uint32_t alloc = (imgSize + 0xFFF) & ~0xFFFu;
-  if (!plat::VmAlloc(G(base), alloc, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE)) {
+  if (!plat::VmAlloc(G(base), alloc, MEM_RESERVE | MEM_COMMIT,
+#ifdef LIFT_NO_NATIVE
+                    PAGE_READWRITE   // translated code is native code: the image is data only (and iOS forbids writable+executable memory)
+#else
+                    PAGE_EXECUTE_READWRITE
+#endif
+                   )) {
     snprintf(err, errLen, "cannot map image at 0x%x size 0x%x", base, alloc);
     return false;
   }

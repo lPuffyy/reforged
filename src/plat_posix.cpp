@@ -172,7 +172,8 @@ static void PageRound(void*& at, size_t& size) {
   uintptr_t pg = (uintptr_t)sysconf(_SC_PAGESIZE), a = (uintptr_t)at, start = a & ~(pg - 1), end = (a + size + pg - 1) & ~(pg - 1);
   at = (void*)start; size = (size_t)(end - start);
 }
-static int ProtFlags(int p) { int f = 0; if (p & kProtRead) f |= PROT_READ; if (p & kProtWrite) f |= PROT_WRITE | PROT_READ; if (p & kProtExec) f |= PROT_EXEC; return f; }
+// Executable mappings are never requested: translated code is ordinary native code, and iOS / Apple Silicon refuse writable+executable pages (W^X), so the exec bit is dropped.
+static int ProtFlags(int p) { int f = 0; if (p & kProtRead) f |= PROT_READ; if (p & kProtWrite) f |= PROT_WRITE | PROT_READ; return f; }
 void* VmReserve(void* at, size_t size) {
   void* p = mmap(at, size, PROT_NONE, MAP_PRIVATE | MAP_ANON | MAP_NORESERVE, -1, 0);
   if (p == MAP_FAILED) return nullptr;
@@ -193,7 +194,7 @@ static int ProtFromWin(uint32_t p) {
 }
 void* VmAlloc(void* at, size_t size, uint32_t type, uint32_t prot) {
   int pr = ProtFromWin(prot);
-  if (!at || (type & MEM_RESERVE)) { void* p = VmReserve(at, size); if (!p) return nullptr; if (type & MEM_COMMIT) VmCommit(p, size, pr); return p; }
+  if (!at || (type & MEM_RESERVE)) { void* p = VmReserve(at, size); if (!p) return nullptr; if ((type & MEM_COMMIT) && !VmCommit(p, size, pr)) { VmRelease(p, 0); return nullptr; } return p; }
   return VmCommit(at, size, pr) ? at : nullptr;      // commit inside an existing reservation
 }
 bool VmFree(void* at, size_t size, uint32_t type) { return (type & MEM_RELEASE) ? VmRelease(at, 0) : VmRelease(at, size); }
