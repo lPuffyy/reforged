@@ -137,11 +137,35 @@ typedef uint32_t(PLAT_STDCALL* S9)(UA, UA, UA, UA, UA, UA, UA, UA, UA);
 typedef uint32_t(PLAT_STDCALL* S10)(UA, UA, UA, UA, UA, UA, UA, UA, UA, UA);
 typedef uint32_t(PLAT_FASTCALL* F1)(UA); typedef uint32_t(PLAT_FASTCALL* F2)(UA, UA); typedef uint32_t(PLAT_FASTCALL* F3)(UA, UA, UA);
 typedef uint64_t(PLAT_STDCALL* Q0)();
+// printf-style formatting of a guest call: `ga` points at the guest stack arguments (format string address first, then the variadic values; 32-bit slots, doubles take two).
+static void GuestFormat(const uint32_t* ga, char* out, size_t cap) {
+  const char* f = ga[0] ? (const char*)G(ga[0]) : ""; unsigned ai = 1; size_t o = 0; out[0] = 0;
+  auto put = [&](const char* s) { while (*s && o + 1 < cap) out[o++] = *s++; out[o] = 0; };
+  while (*f && o + 1 < cap) {
+    if (*f != '%') { out[o++] = *f++; out[o] = 0; continue; }
+    char spec[24]; unsigned sl = 0; spec[sl++] = *f++;
+    if (*f == '%') { ++f; put("%"); continue; }
+    while (*f && strchr("-+ #0123456789.lhzjt", *f) && sl < sizeof spec - 4) { if (*f != 'l' && *f != 'h' && *f != 'z' && *f != 'j' && *f != 't') spec[sl++] = *f; ++f; }
+    char conv = *f ? *f++ : 0; char buf[400];
+    switch (conv) {
+      case 'd': case 'i': spec[sl++] = 'd'; spec[sl] = 0; snprintf(buf, sizeof buf, spec, (int)ga[ai++]); put(buf); break;
+      case 'u': case 'x': case 'X': case 'o': spec[sl++] = conv; spec[sl] = 0; snprintf(buf, sizeof buf, spec, (unsigned)ga[ai++]); put(buf); break;
+      case 'c': spec[sl++] = 'c'; spec[sl] = 0; snprintf(buf, sizeof buf, spec, (int)ga[ai++]); put(buf); break;
+      case 'p': snprintf(buf, sizeof buf, "0x%08x", ga[ai++]); put(buf); break;
+      case 's': { uint32_t a = ga[ai++]; spec[sl++] = 's'; spec[sl] = 0; snprintf(buf, sizeof buf, spec, a ? (const char*)G(a) : "(null)"); put(buf); break; }
+      case 'f': case 'e': case 'g': case 'E': case 'G': { uint64_t bits = (uint64_t)ga[ai] | ((uint64_t)ga[ai + 1] << 32); ai += 2; double dv; memcpy(&dv, &bits, 8); spec[sl++] = conv; spec[sl] = 0; snprintf(buf, sizeof buf, spec, dv); put(buf); break; }
+      default: break;
+    }
+  }
+}
 static void KBridge(LiftCpu* c, const KernelImport* k) {
   if (!k->fn) { c->eax = 0; c->esp += 4 + 4 * k->argc; return; }
   const uint32_t* ga = (const uint32_t*)G(c->esp + 4); uint32_t r = 0; uint64_t r64 = 0; bool wide = false; int pops = 0;
   UA a[10]; for (int i = 0; i < 10; i++) a[i] = ((k->ptrMask >> i) & 1) ? (ga[i] ? (UA)G(ga[i]) : 0) : (UA)ga[i];   // pointer arguments become host pointers
-  if (k->conv == 'c') { r = 0; pops = 0; }   // variadic cdecl (DbgPrint): ignored
+  if (k->conv == 'c') {   // variadic cdecl (DbgPrint): the caller pops the arguments
+    r = 0; pops = 0;
+    if (!strcmp(k->name, "DbgPrint")) { char line[1024]; GuestFormat(ga, line, sizeof line); size_t n = strlen(line); while (n && (line[n - 1] == '\n' || line[n - 1] == '\r')) line[--n] = 0; Log("[DbgPrint] %s", line); }
+  }
   else if (k->conv == 'f') {
     uint32_t ecx = c->ecx, edx = c->edx; int n = k->argc; pops = n > 2 ? n - 2 : 0; 
     switch (n) { case 1: r = ((F1)k->fn)((k->ptrMask & 1) && ecx ? (UA)G(ecx) : (UA)ecx); break; case 2: r = ((F2)k->fn)((k->ptrMask & 1) && ecx ? (UA)G(ecx) : (UA)ecx, edx); break; case 3: r = ((F3)k->fn)(ecx, edx, a[0]); break;
