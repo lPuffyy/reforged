@@ -83,21 +83,12 @@ jobs:
       - name: Translator end-to-end (generate a test program, translate it, build it into the runtime, run it)
         shell: bash
         run: |
-          python -m pip install --quiet capstone
-          mkdir -p lt/work/lift && cd lt
-          python ../tests/make_test_xbe.py lift_test.xbe expected.txt
-          python ../tools/lift_survey.py lift_test.xbe > survey.log
-          python ../tools/lift.py lift_test.xbe --out work/lift/gen > lift.log
-          tail -3 lift.log
-          cmake -S .. -B ../build-lt -DCMAKE_BUILD_TYPE=Release -DREFORGED_LIFTED_DIR="$PWD/work/lift/gen" $CMAKE_EXTRA
-          cmake --build ../build-lt --config Release --parallel --target reforged
-          exe=../build-lt/reforged
-          if [ -f ../build-lt/Release/reforged.exe ]; then exe=../build-lt/Release/reforged.exe; fi
-          XBOX_LIFT=1 "$exe" none lift_test.xbe 3 > run.log 2>&1 || true
-          grep '^\[DbgPrint\] ' run.log | sed 's/^\[DbgPrint\] //' | tr -d '\r' > got.txt || true
-          tr -d '\r' < expected.txt > want.txt
-          if diff -u want.txt got.txt > diff.txt; then echo "translated program output matches ($(wc -l < got.txt) lines)"; exit 0; fi
-          msg=$( (cat diff.txt; echo ---; grep -E "lift\]|FATAL|crash|unsupported" run.log | head -30) | head -c 6000 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
-          echo "::error title=translator end-to-end mismatch::$msg"
-          exit 1
-
+          set +e
+          bash tests/lift_e2e.sh > e2e.log 2>&1
+          rc=$?
+          cat e2e.log
+          if [ $rc -ne 0 ]; then
+            msg=$(tail -c 6000 e2e.log | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+            echo "::error title=translator end-to-end failed::$msg"
+          fi
+          exit $rc
