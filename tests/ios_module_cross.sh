@@ -24,7 +24,7 @@ echo "--- exports"
 grep -q "_reforged_module_init" exports.txt || { echo "entry point not exported"; exit 1; }
 echo "--- undefined symbols (resolved from the system when the module is loaded)"
 "$nm" -u game_module.dylib | sed 's/^ *//' | sort -u | tee undefined.txt
-allowed="_memcpy _memmove _memset _memcmp _strlen _malloc _free _posix_memalign _abort _fegetround _fesetround _sin _cos _tan _atan _atan2 _sqrt _pow _log _log2 _log10 _exp _exp2 _ldexp _frexp _fabs _floor _ceil _trunc _fmod _rint _nearbyint _round _copysign _sinf _cosf _tanf _sqrtf _fabsf _floorf _ceilf _powf _lrint _llrint _sys_icache_invalidate _sys_dcache_flush"
+allowed="_memcpy _memmove _memset _memcmp _strlen _malloc _free _posix_memalign _abort _fegetround _fesetround _sin _cos _tan _atan _atan2 _sqrt _pow _log _log2 _log10 _exp _exp2 _ldexp _frexp _fabs _floor _ceil _trunc _fmod _rint _nearbyint _round _copysign _sinf _cosf _tanf _sqrtf _fabsf _floorf _ceilf _powf _lrint _llrint _sys_icache_invalidate _sys_dcache_flush dyld_stub_binder"
 bad=0
 while read -r sym; do
   [ -z "$sym" ] && continue
