@@ -94,8 +94,8 @@ jobs:
           exe=../build-lt/reforged
           if [ -f ../build-lt/Release/reforged.exe ]; then exe=../build-lt/Release/reforged.exe; fi
           XBOX_LIFT=1 "$exe" none lift_test.xbe 3 > run.log 2>&1 || true
-          grep '^\[DbgPrint\] ' run.log | sed 's/^\[DbgPrint\] //' | tr -d '' > got.txt || true
-          tr -d '' < expected.txt > want.txt
+          grep '^\[DbgPrint\] ' run.log | sed 's/^\[DbgPrint\] //' | tr -d '\r' > got.txt || true
+          tr -d '\r' < expected.txt > want.txt
           if diff -u want.txt got.txt > diff.txt; then echo "translated program output matches ($(wc -l < got.txt) lines)"; exit 0; fi
           msg=$( (cat diff.txt; echo ---; grep -E "lift\]|FATAL|crash|unsupported" run.log | head -30) | head -c 6000 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
           echo "::error title=translator end-to-end mismatch::$msg"
