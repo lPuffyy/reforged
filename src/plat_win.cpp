@@ -1,5 +1,7 @@
 // Windows implementation of plat.h: thin wrappers, same behaviour as calling Win32 directly. An Obj* is the Win32 HANDLE itself.
 #ifdef _WIN32
+#define _CRT_RAND_S
+#include <stdlib.h>
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
@@ -143,6 +145,8 @@ bool SpawnSelf(const std::vector<std::string>& args) {
   if (!CreateProcessA(nullptr, &cmd[0], nullptr, nullptr, TRUE, 0, nullptr, nullptr, &si, &pi)) return false;
   CloseHandle(pi.hThread); CloseHandle(pi.hProcess); return true;
 }
+
+uint32_t RandomU32() { unsigned v = 0; rand_s(&v); return v; }
 
 static CrashFn g_crash;
 static LONG WINAPI CrashTramp(EXCEPTION_POINTERS* e) {

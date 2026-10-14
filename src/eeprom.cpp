@@ -15,7 +15,7 @@
 namespace {
 uint8_t g_ee[256]; bool g_init = false;   // saved user settings (REG_DWORD) live in the user section: dword per index at 0x64 + 4 * index, "is saved" bitmap in the last dword (0xFC)
 std::string EePath() { const char* p = getenv("XBOX_EEPROM"); return p && *p ? p : "work/eeprom.bin"; }
-void Rand(uint8_t* p, size_t n) { for (size_t i = 0; i < n; i++) { unsigned v = 0; rand_s(&v); p[i] = (uint8_t)(v >> 8); } }
+void Rand(uint8_t* p, size_t n) { for (size_t i = 0; i < n; i++) { unsigned v = plat::RandomU32(); p[i] = (uint8_t)(v >> 8); } }
 
 // ---- EEPROM security-section encryption (public description of the retail EEPROM format; same scheme every Xbox kernel uses) ----
 // The "key" is a pair of precomputed SHA-1 states (inner/outer HMAC pads) per kernel generation; hash = H_outer(H_inner(data)), RC4 key = hash of hash.
@@ -57,7 +57,7 @@ bool Decrypt() {
 void Generate() {
   memset(g_ee, 0, sizeof g_ee);
   Rand(g_ee + 0x14, 8); Rand(g_ee + 0x1C, 16); *(uint32_t*)(g_ee + 0x2C) = 1;                      // confounder, HDD key, region 1 (NTSC-U)
-  for (int i = 0; i < 12; i++) { unsigned v; rand_s(&v); g_ee[0x34 + i] = (uint8_t)('0' + v % 10); }  // serial number: 12 digits
+  for (int i = 0; i < 12; i++) { unsigned v = plat::RandomU32(); g_ee[0x34 + i] = (uint8_t)('0' + v % 10); }  // serial number: 12 digits
   g_ee[0x40] = 0x00; g_ee[0x41] = 0x50; g_ee[0x42] = 0xF2; Rand(g_ee + 0x43, 3);                      // MAC: Xbox OUI + random tail
   Rand(g_ee + 0x48, 16);                                                                            // online key
   *(uint32_t*)(g_ee + 0x58) = 0x00400100;                                                           // video standard NTSC-M

@@ -5,6 +5,7 @@
 #include "kernel.h"
 #include "net_sock.h"
 #include "plat.h"
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -33,7 +34,7 @@ uint16_t Csum(const uint8_t* d, size_t n, uint32_t init = 0) { uint32_t s = init
 void NL(const char* f, ...) { if (!g_log || g_logN <= 0) return; --g_logN; char b[300]; va_list a; va_start(a, f); vsnprintf(b, sizeof b, f, a); va_end(a); Log("[net] %s", b); }
 
 void Pcap(const uint8_t* f, uint32_t len) {
-  if (!g_pcap) return; std::lock_guard<std::mutex> l(g_pcapMx); uint32_t h[4]; SYSTEMTIME st; GetSystemTime(&st); FILETIME ft; SystemTimeToFileTime(&st, &ft); uint64_t t = ((uint64_t)ft.dwHighDateTime << 32 | ft.dwLowDateTime) / 10 - 11644473600000000ull;
+  if (!g_pcap) return; std::lock_guard<std::mutex> l(g_pcapMx); uint32_t h[4]; uint64_t t = plat::SystemTime100ns() / 10 - 11644473600000000ull;
   h[0] = (uint32_t)(t / 1000000); h[1] = (uint32_t)(t % 1000000); h[2] = h[3] = len; fwrite(h, 4, 4, g_pcap); fwrite(f, 1, len, g_pcap); fflush(g_pcap);
 }
 void ToGuest(const uint8_t* f, uint32_t len) { Pcap(f, len); NvnetReceive(f, len); }

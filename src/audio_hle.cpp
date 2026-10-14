@@ -195,7 +195,7 @@ H(IDirectSoundBuffer_GetCurrentPosition, uint32_t buf, uint32_t* play, uint32_t*
   if (play) *play = p; if (write) *write = p; return 0;
 }
 H(IDirectSoundBuffer_GetStatus, uint32_t buf, uint32_t* status) { Voice* v = Get(buf); uint32_t s = 0; if (v && v->playing) s |= 1 | (v->looping ? 4 : 0); if (status) *status = s;
-  { static const bool lg = getenv("XBOX_DSLOG2") != nullptr; static std::map<uint32_t, uint32_t> last; if (lg) { auto it = last.find(buf); if (it == last.end() || it->second != s) { last[buf] = s; Log("[audio] GetStatus buf=0x%x v=%p -> 0x%x (from %p)", buf, v, s, _ReturnAddress()); } } }
+  { static const bool lg = getenv("XBOX_DSLOG2") != nullptr; static std::map<uint32_t, uint32_t> last; if (lg) { auto it = last.find(buf); if (it == last.end() || it->second != s) { last[buf] = s; Log("[audio] GetStatus buf=0x%x v=%p -> 0x%x (from %p)", buf, v, s, PLAT_RETADDR()); } } }
   return 0; }
 H(IDirectSoundBuffer_SetVolume, uint32_t buf, int32_t vol) { Voice* v = Get(buf); if (v) v->gain = Gain(vol); return 0; }
 H(IDirectSoundBuffer_SetFrequency, uint32_t buf, uint32_t hz) { Voice* v = Get(buf); if (v) v->pitchRate = hz ? hz : v->rate; return 0; }

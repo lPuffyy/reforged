@@ -154,6 +154,9 @@ bool AudioOutStart(uint32_t rate, uint32_t frames, uint32_t buffers, AudioFn fn,
 void SetEnv(const char* name, const char* value);
 bool SpawnSelf(const std::vector<std::string>& args);   // start another instance of this program with these arguments (false where processes cannot be spawned, e.g. iOS)
 
+// ---- randomness ----
+uint32_t RandomU32();               // from the OS entropy source (console identity, serial numbers)
+
 // ---- diagnostics ----
 typedef void (*CrashFn)(const char* what, uintptr_t address, uintptr_t ip);
 void InstallCrashHandler(CrashFn fn);    // called on an access violation / illegal instruction; the process then terminates

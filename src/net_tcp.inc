@@ -88,7 +88,7 @@ uint32_t ListenThread(void* p) {
   SOCKET s = (SOCKET)(uintptr_t)p; uint8_t buf[2048];
   for (;;) {
     sockaddr_in from; socklen_t fl = sizeof from; int n = recvfrom(s, (char*)buf, sizeof buf, 0, (sockaddr*)&from, &fl); if (n <= 0) { plat::SleepMs(50); continue; }
-    sockaddr_in me; int ml = sizeof me; getsockname(s, (sockaddr*)&me, &ml); uint32_t src = ntohl(from.sin_addr.s_addr); if (src == 0x7F000001) continue;
+    sockaddr_in me; socklen_t ml = sizeof me; getsockname(s, (sockaddr*)&me, &ml); uint32_t src = ntohl(from.sin_addr.s_addr); if (src == 0x7F000001) continue;
     static uint8_t bc[6] = {255, 255, 255, 255, 255, 255};
     NL("LAN broadcast %d bytes from %u.%u.%u.%u:%u -> guest", n, src >> 24, (src >> 16) & 255, (src >> 8) & 255, src & 255, ntohs(from.sin_port));
     SendUdp(src, ntohs(from.sin_port), 0xFFFFFFFF, ntohs(me.sin_port), buf, (uint32_t)n, bc);

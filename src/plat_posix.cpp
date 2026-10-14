@@ -286,6 +286,8 @@ bool SpawnSelf(const std::vector<std::string>& args) {
 #endif
 }
 
+uint32_t RandomU32() { uint32_t v = 0; FILE* f = fopen("/dev/urandom", "rb"); if (f) { if (fread(&v, 1, 4, f) != 4) v = (uint32_t)PerfCounter(); fclose(f); } else v = (uint32_t)PerfCounter(); return v; }
+
 static CrashFn g_crash;
 static void CrashSig(int sig, siginfo_t* si, void* uc) {
   (void)uc; if (g_crash) g_crash(sig == SIGSEGV || sig == SIGBUS ? "access violation" : sig == SIGILL ? "illegal instruction" : "signal", (uintptr_t)si->si_addr, 0);

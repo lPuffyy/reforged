@@ -2,6 +2,7 @@
 #include "kernel.h"
 #include "guestmem.h"
 #include <cstring>
+#include <cwctype>
 #include <map>
 #include <mutex>
 

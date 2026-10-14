@@ -3,6 +3,7 @@
 // reserved region at g_guestBase and G(a) = base + a (the iOS/Linux layout). Lifted code and host code must both use these, never raw casts.
 #pragma once
 #include <stdint.h>
+#include <stddef.h>
 #ifdef __cplusplus
 extern "C" {
 #endif

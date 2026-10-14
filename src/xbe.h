@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <cstddef>
 struct XbeInfo {
   uint32_t base, entry, kernelThunk, stackCommit, tlsAddr, certAddr;
   uint32_t imageEnd;
