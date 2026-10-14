@@ -36,15 +36,20 @@ add_custom_command(OUTPUT ${KERNEL_STUBS}
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Generating kernel import stubs")
 
+option(REFORGED_LIFTED_AS_MODULE "Build the translated code as a loadable module (lift_module) instead of linking it into the runtime" OFF)
 set(LIFTED_SOURCES "")
 if(REFORGED_LIFTED_DIR)
   file(GLOB LIFTED_SOURCES CONFIGURE_DEPENDS ${REFORGED_LIFTED_DIR}/*.cpp)
 endif()
+set(LIFTED_LINKED ${LIFTED_SOURCES})
+if(REFORGED_LIFTED_AS_MODULE)
+  set(LIFTED_LINKED "")
+endif()
 
-add_executable(reforged ${PORTABLE_SOURCES} ${PLATFORM_SOURCES} ${KERNEL_STUBS} ${LIFTED_SOURCES})
+add_executable(reforged ${PORTABLE_SOURCES} ${PLATFORM_SOURCES} ${KERNEL_STUBS} ${LIFTED_LINKED})
 target_include_directories(reforged PRIVATE src)
 target_compile_definitions(reforged PRIVATE LIFT_NO_NATIVE LIFT_EXPLICIT_MMIO)
-if(REFORGED_LIFTED_DIR)
+if(REFORGED_LIFTED_DIR AND NOT REFORGED_LIFTED_AS_MODULE)
   target_compile_definitions(reforged PRIVATE HAVE_LIFT)
   target_include_directories(reforged PRIVATE ${REFORGED_LIFTED_DIR})
 endif()
@@ -62,6 +67,21 @@ if(MSVC)
   target_link_libraries(reforged PRIVATE winmm user32 gdi32 ws2_32)
 else()
   target_compile_options(reforged PRIVATE -Wno-unused-result -Wno-format-security -fno-strict-aliasing)
+endif()
+
+# The translated code as a separately built module: it talks to the runtime only through the HostApi table (src/lift_rt.h), so it can be built by
+# a cross compiler without any of the runtime's headers or libraries (this is how the iOS module is produced).
+if(REFORGED_LIFTED_DIR AND REFORGED_LIFTED_AS_MODULE)
+  add_library(lift_module MODULE ${LIFTED_SOURCES} src/lift_module_main.cpp)
+  set_target_properties(lift_module PROPERTIES PREFIX "" CXX_VISIBILITY_PRESET hidden)
+  target_compile_definitions(lift_module PRIVATE LIFT_MODULE LIFT_NO_NATIVE LIFT_EXPLICIT_MMIO)
+  target_include_directories(lift_module PRIVATE src ${REFORGED_LIFTED_DIR})
+  if(SSE2NEON_DIR)
+    target_include_directories(lift_module PRIVATE ${SSE2NEON_DIR})
+  endif()
+  if(NOT WIN32)
+    target_link_libraries(lift_module PRIVATE m)
+  endif()
 endif()
 
 # Behavioural tests for the platform layer (same program on every OS).

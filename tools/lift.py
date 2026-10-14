@@ -540,7 +540,7 @@ def emit_mmx(f, a, i, mn, ops, n, L):
     raise Unsupported(mn)
 
 # ---------------------------------------------------------------- function emission
-HDR = '#include "lift_rt.h"\nextern "C" {\nuint32_t LiftXadd32(uint32_t,uint32_t); uint32_t LiftCmpxchg32(uint32_t,uint32_t*,uint32_t); void LiftXchg32(uint32_t,uint32_t*); uint32_t LiftLock32(int,uint32_t,uint32_t); uint64_t LiftRdtsc();\n}\n'
+HDR = '#include "lift_rt.h"\n'   # the runtime entry points are declared (or, in a module build, mapped to the host table) by lift_rt.h
 DECL = '  uint32_t eax=c->eax,ecx=c->ecx,edx=c->edx,ebx=c->ebx,esp=c->esp,ebp=c->ebp,esi=c->esi,edi=c->edi; uint32_t cf,zf,sf,of,pf,af,df=0,xf=0; FL_UNPACK(); (void)df;(void)xf; (void)cf;(void)zf;(void)sf;(void)of;(void)pf;(void)af;\n'
 DEFS = '#define WBACK { c->eax=eax;c->ecx=ecx;c->edx=edx;c->ebx=ebx;c->ebp=ebp;c->esi=esi;c->edi=edi; }\n#define RELOAD { eax=c->eax;ecx=c->ecx;edx=c->edx;ebx=c->ebx;esp=c->esp;ebp=c->ebp;esi=c->esi;edi=c->edi; FL_UNPACK(); }\n'
 LAST = None; HI = {}; FLAGS = {}

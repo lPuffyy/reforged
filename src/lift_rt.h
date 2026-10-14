@@ -23,6 +23,42 @@ struct LiftCpu {
 };
 typedef void (*LiftFn)(LiftCpu*);
 
+#define LIFT_ABI_VERSION 1
+// The translated code can be built as a separate module (a shared library the host loads at startup). It reaches the runtime only through this table of
+// function pointers, handed over once by reforged_module_init(): no symbol lookup between the module and the host, which is what an iOS app needs.
+// (The struct is shared by both sides; the macros below exist only in the module build.)
+struct HostApi {
+  uint32_t abi;                                           // LIFT_ABI_VERSION
+  uintptr_t guestBase;                                    // G(a) = guestBase + a
+  void (*dispatch)(LiftCpu*, uint32_t);                   // call a guest address (lifted function, kernel import or override)
+  void (*unsupported)(uint32_t, const char*);
+  void (*here)(uint32_t);
+  uint64_t (*rdtsc)();
+  uint32_t (*xadd32)(uint32_t, uint32_t);
+  uint32_t (*cmpxchg32)(uint32_t, uint32_t*, uint32_t);
+  void (*xchg32)(uint32_t, uint32_t*);
+  uint32_t (*lock32)(int, uint32_t, uint32_t);
+  uint32_t (*mmioRead)(uint32_t, int);
+  void (*mmioWrite)(uint32_t, uint32_t, int);
+  uint32_t (*portIn)(uint16_t, int);
+  void (*portOut)(uint16_t, uint32_t, int);
+};
+#ifdef LIFT_MODULE
+extern const HostApi* g_host;
+#define LiftDispatch (g_host->dispatch)
+#define LiftUnsupported (g_host->unsupported)
+#define LiftHere (g_host->here)
+#define LiftRdtsc (g_host->rdtsc)
+#define LiftXadd32 (g_host->xadd32)
+#define LiftCmpxchg32 (g_host->cmpxchg32)
+#define LiftXchg32 (g_host->xchg32)
+#define LiftLock32 (g_host->lock32)
+#define MmioRead (g_host->mmioRead)
+#define MmioWrite (g_host->mmioWrite)
+#define PortIn (g_host->portIn)
+#define PortOut (g_host->portOut)
+extern "C" volatile long long g_liftIcount;
+#else
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -30,18 +66,22 @@ uint32_t PortIn(uint16_t port, int size); void PortOut(uint16_t port, uint32_t v
 void LiftDispatch(LiftCpu* c, uint32_t target);   // call a guest address: lifted function if we have one, else the original native code / kernel import
 void LiftUnsupported(uint32_t addr, const char* what);
 void LiftHere(uint32_t addr);                     // trace hook (XBOX_LIFT_TRACE)
+uint32_t LiftXadd32(uint32_t, uint32_t); uint32_t LiftCmpxchg32(uint32_t, uint32_t*, uint32_t); void LiftXchg32(uint32_t, uint32_t*); uint32_t LiftLock32(int, uint32_t, uint32_t); uint64_t LiftRdtsc();
 #ifdef __cplusplus
 }
 #endif
 
 extern "C" volatile long long g_liftIcount;
+#endif
 #define LiftCount(n) (g_liftIcount += (n))   // approximate (racy, non-atomic) guest instruction counter: build with tools/lift.py --count
 // ---- guest memory ----
 #include "guestmem.h"
 #define GP(a) G(a)
 #ifdef LIFT_EXPLICIT_MMIO
 // Hardware windows (>= 0xFD000000) are routed to the device models instead of relying on a page-fault trap (not available on iOS).
+#ifndef LIFT_MODULE
 extern "C" uint32_t MmioRead(uint32_t a, int size); extern "C" void MmioWrite(uint32_t a, uint32_t v, int size);
+#endif
 static inline uint8_t  RD8(uint32_t a)  { return a >= 0xFD000000u ? (uint8_t)MmioRead(a, 1)  : *(volatile uint8_t*)GP(a); }
 static inline uint16_t RD16(uint32_t a) { return a >= 0xFD000000u ? (uint16_t)MmioRead(a, 2) : *(volatile uint16_t*)GP(a); }
 static inline uint32_t RD32(uint32_t a) { return a >= 0xFD000000u ? MmioRead(a, 4) : *(volatile uint32_t*)GP(a); }

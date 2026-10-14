@@ -52,6 +52,21 @@ uint32_t KernelImportAddr(const KernelImport* k) {
 }
 static void DumpAllRings();
 bool LiftEnabled() { return g_on; }
+// The translated code: linked into this executable (HAVE_LIFT) or loaded at startup from a module built separately (XBOX_LIFT_MODULE=path).
+static const LiftEntry* g_tab = nullptr; static unsigned g_tabCount = 0;
+extern "C" void LiftDispatch(LiftCpu* c, uint32_t target); extern "C" void LiftUnsupported(uint32_t addr, const char* what); extern "C" void LiftHere(uint32_t addr);
+static bool LoadLiftModule(const char* path) {
+  void* lib = plat::LoadLib(path); if (!lib) { Log("[lift] cannot load module %s", path); return false; }
+  typedef int (*InitFn)(const HostApi*, const LiftEntry**, unsigned*);
+  InitFn init = (InitFn)plat::LibSym(lib, "reforged_module_init"); if (!init) { Log("[lift] %s has no reforged_module_init", path); return false; }
+  static HostApi api = {};
+  api.abi = LIFT_ABI_VERSION; api.guestBase = g_guestBase; api.dispatch = LiftDispatch; api.unsupported = LiftUnsupported; api.here = LiftHere; api.rdtsc = LiftRdtsc;
+  api.xadd32 = LiftXadd32; api.cmpxchg32 = LiftCmpxchg32; api.xchg32 = LiftXchg32; api.lock32 = LiftLock32;
+  api.mmioRead = MmioRead; api.mmioWrite = MmioWrite; api.portIn = PortIn; api.portOut = PortOut;
+  const LiftEntry* t = nullptr; unsigned n = 0;
+  if (init(&api, &t, &n) != 0) { Log("[lift] module %s was built for a different runtime ABI", path); return false; }
+  g_tab = t; g_tabCount = n; Log("[lift] module %s: %u translated functions", path, n); return true;
+}
 // Dispatch overrides: guest addresses whose code is replaced by a host stdcall function (the DSOUND/XInput HLE). On iOS there are no byte patches, so this is the mechanism.
 static std::unordered_map<uint32_t, KernelImport*> g_over; void LiftAddOverride(uint32_t addr, void* fn, int argBytes, uint32_t ptrMask = 0);
 uint32_t LiftSynthAddr(void* fn, int argBytes, uint32_t ptrMask) {   // a fresh synthetic guest address (never executable memory) that dispatches to a host function
@@ -69,6 +84,8 @@ extern "C" bool LiftQuiet() { return t_quiet; }
 // Disable lifted functions whose bytes in memory differ from the file (the host patches the image: hooks, hardware-wait shortcuts, fs: reads).
 void LiftInit(const char* xbePath) {
   if (!getenv("XBOX_LIFT")) return;
+  if (const char* m = getenv("XBOX_LIFT_MODULE")) LoadLiftModule(m);
+  if (!g_tab) { g_tab = g_liftTable; g_tabCount = g_liftCount; }
   FILE* f = fopen(xbePath, "rb"); if (!f) { Log("[lift] cannot open %s", xbePath); return; }
   std::vector<uint8_t> d; { fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET); d.resize(n); fread(d.data(), 1, n, f); fclose(f); }
   uint32_t base = *(uint32_t*)&d[0x104], nsec = *(uint32_t*)&d[0x11C], sa = *(uint32_t*)&d[0x120];
@@ -85,9 +102,9 @@ void LiftInit(const char* xbePath) {
   if (FILE* fp = fopen(pf, "r")) { unsigned va, size, r, w, disp; while (fscanf(fp, "%x %u %u %u %x", &va, &size, &r, &w, &disp) == 5) fsSites.push_back({va, size}); fclose(fp); }
   if (const char* sk = getenv("XBOX_LIFT_SKIP")) { const char* q = sk; while (*q) { unsigned v = 0; if (sscanf(q, "%x", &v) == 1) g_skip[v] = 1; while (*q && *q != ',') q++; if (*q == ',') q++; } }
   unsigned holeLo = 0, holeHi = 0; if (const char* h = getenv("XBOX_LIFT_HOLE")) sscanf(h, "%u,%u", &holeLo, &holeHi);
-  int patched = 0; unsigned lo = 0, hi = g_liftCount; if (const char* r = getenv("XBOX_LIFT_RANGE")) sscanf(r, "%u,%u", &lo, &hi);   // bisection aid: only table entries [lo,hi) run lifted
-  for (unsigned i = 0; i < g_liftCount; i++) {
-    const LiftEntry& e = g_liftTable[i]; bool same = i >= lo && i < hi;
+  int patched = 0; unsigned lo = 0, hi = g_tabCount; if (const char* r = getenv("XBOX_LIFT_RANGE")) sscanf(r, "%u,%u", &lo, &hi);   // bisection aid: only table entries [lo,hi) run lifted
+  for (unsigned i = 0; i < g_tabCount; i++) {
+    const LiftEntry& e = g_tab[i]; bool same = i >= lo && i < hi;
     for (auto& s : secs) if (same && e.addr >= s.v && e.addr < s.v + s.rs) {
       uint32_t n = e.hi > e.addr ? e.hi - e.addr : 16; if (e.addr + n > s.v + s.rs) n = s.v + s.rs - e.addr;
       for (uint32_t k = 0; k < n && same; k++) {
@@ -371,8 +388,8 @@ static void LiftSelfTest() {
   XThreadInit(0); { uint8_t* pcr = G(XPcrGet()); *(uint32_t*)(pcr + 0x808) = __readfsdword(4); *(uint32_t*)(pcr + 0x80C) = __readfsdword(8); }   // bounds unchanged: the guest stack is inside them
   int tested = 0, bad = 0, skipped = 0; int trials = getenv("XBOX_LIFT_SELFTEST") && atoi(getenv("XBOX_LIFT_SELFTEST")) > 1 ? atoi(getenv("XBOX_LIFT_SELFTEST")) : 24;
   unsigned from = getenv("XBOX_LIFT_SELFTEST_FROM") ? (unsigned)atoi(getenv("XBOX_LIFT_SELFTEST_FROM")) : 0;   // restartable: the driver script resumes after a function that killed the process
-  for (unsigned i = from; i < g_liftCount; i++) {
-    const LiftEntry& e = g_liftTable[i]; if (!(e.flags & 1) || !g_lifted.count(e.addr)) continue;
+  for (unsigned i = from; i < g_tabCount; i++) {
+    const LiftEntry& e = g_tab[i]; if (!(e.flags & 1) || !g_lifted.count(e.addr)) continue;
     if (const char* only = getenv("XBOX_LIFT_SELFTEST_ONLY")) { unsigned o = 0; sscanf(only, "%x", &o); if (o != e.addr) continue; }
     if (FILE* pf = fopen("work/lift/st_pos.txt", "w")) { fprintf(pf, "%u %x\n", i, e.addr); fclose(pf); }
     if (getenv("XBOX_LIFT_SELFTEST_V")) { Log("[selftest] f_%08x", e.addr); fflush(nullptr); }

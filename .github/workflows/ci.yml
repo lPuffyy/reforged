@@ -46,6 +46,7 @@ jobs:
           if [ "${{ matrix.name }}" = "linux-arm64" ] || [ "${{ matrix.name }}" = "macos-arm64" ]; then extra="-DSSE2NEON_DIR=$RUNNER_TEMP/sse2neon"; fi
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DVULKAN_HEADERS_DIR="$RUNNER_TEMP/vk-headers/include" $extra
           echo "CMAKE_EXTRA=-DVULKAN_HEADERS_DIR=$RUNNER_TEMP/vk-headers/include $extra" >> "$GITHUB_ENV"
+          if [ -n "$extra" ]; then echo "SSE2NEON_DIR=$RUNNER_TEMP/sse2neon" >> "$GITHUB_ENV"; fi
       - name: Build
         shell: bash
         run: |
