@@ -14,7 +14,8 @@ jobs:
       - name: No game-derived or private files
         run: python -I tools/check_clean.py
 
-  # The portable core on every host we care about: Windows x64, Linux x64 and Linux arm64 (arm64 is the iOS architecture; it uses sse2neon for the SSE/MMX helpers).
+  # The portable core on every host we care about: Windows x64, Linux x64, Linux arm64 and Apple Silicon macOS (arm64 is the iOS architecture; it uses
+  # sse2neon for the SSE/MMX helpers, and macOS exercises the same Apple toolchain and POSIX paths as iOS).
   build:
     needs: hygiene
     strategy:
@@ -24,6 +25,7 @@ jobs:
           - { name: linux-x64, os: ubuntu-latest }
           - { name: linux-arm64, os: ubuntu-24.04-arm }
           - { name: windows-x64, os: windows-latest }
+          - { name: macos-arm64, os: macos-14 }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -34,14 +36,14 @@ jobs:
         shell: bash
         run: git clone --depth 1 --branch v1.3.280 https://github.com/KhronosGroup/Vulkan-Headers.git "$RUNNER_TEMP/vk-headers"
       - name: sse2neon (arm64 only)
-        if: matrix.name == 'linux-arm64'
+        if: matrix.name == 'linux-arm64' || matrix.name == 'macos-arm64'
         shell: bash
         run: git clone --depth 1 --branch v1.8.0 https://github.com/DLTcollab/sse2neon.git "$RUNNER_TEMP/sse2neon"
       - name: Configure
         shell: bash
         run: |
           extra=""
-          if [ "${{ matrix.name }}" = "linux-arm64" ]; then extra="-DSSE2NEON_DIR=$RUNNER_TEMP/sse2neon"; fi
+          if [ "${{ matrix.name }}" = "linux-arm64" ] || [ "${{ matrix.name }}" = "macos-arm64" ]; then extra="-DSSE2NEON_DIR=$RUNNER_TEMP/sse2neon"; fi
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DVULKAN_HEADERS_DIR="$RUNNER_TEMP/vk-headers/include" $extra
       - name: Build
         shell: bash
@@ -68,7 +70,8 @@ jobs:
           exe=build/reforged
           if [ -f build/Release/reforged.exe ]; then exe=build/Release/reforged.exe; fi
           set +e
-          timeout 60 "$exe" none none 2 > smoke.log 2>&1
+          T=""; if command -v timeout >/dev/null 2>&1; then T="timeout 60"; fi   # macOS runners have no timeout
+          $T "$exe" none none 2 > smoke.log 2>&1
           rc=$?
           cat smoke.log
           echo "exit code: $rc"

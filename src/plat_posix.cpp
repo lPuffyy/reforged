@@ -31,6 +31,7 @@
 #include <unistd.h>
 #ifdef __APPLE__
 #include <TargetConditionals.h>
+#include <mach-o/dyld.h>
 #endif
 #ifdef __linux__
 #include <sys/syscall.h>
@@ -282,9 +283,14 @@ bool AudioOutStart(uint32_t rate, uint32_t frames, uint32_t, AudioFn fn, void* u
 void SetEnv(const char* name, const char* value) { setenv(name, value, 1); }
 bool SpawnSelf(const std::vector<std::string>& args) {
 #if defined(__APPLE__) && TARGET_OS_IPHONE
-  (void)args; return false;
+  (void)args; return false;   // iOS apps cannot start processes
 #else
-  char exe[4096]; ssize_t n = readlink("/proc/self/exe", exe, sizeof exe - 1); if (n <= 0) return false; exe[n] = 0;
+  char exe[4096];
+#ifdef __APPLE__
+  uint32_t sz = sizeof exe; if (_NSGetExecutablePath(exe, &sz) != 0) return false;
+#else
+  ssize_t n = readlink("/proc/self/exe", exe, sizeof exe - 1); if (n <= 0) return false; exe[n] = 0;
+#endif
   pid_t pid = fork(); if (pid < 0) return false;
   if (pid == 0) { std::vector<char*> av; av.push_back(exe); for (auto& a : args) av.push_back(const_cast<char*>(a.c_str())); av.push_back(nullptr); execv(exe, av.data()); _exit(127); }
   return true;
