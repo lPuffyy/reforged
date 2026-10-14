@@ -93,3 +93,31 @@ jobs:
             echo "::error title=translator end-to-end failed::$msg"
           fi
           exit $rc
+
+  # The iOS game module built with a plain LLVM toolchain on a non-Apple machine (no SDK): the build the companion tool performs on the user's computer.
+  ios-module-cross:
+    needs: hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Toolchain (clang + lld)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq clang lld llvm
+      - name: sse2neon
+        run: git clone --depth 1 --branch v1.8.0 https://github.com/DLTcollab/sse2neon.git "$RUNNER_TEMP/sse2neon"
+      - name: Build and inspect the iOS module
+        shell: bash
+        run: |
+          set +e
+          export SSE2NEON_DIR="$RUNNER_TEMP/sse2neon"
+          bash tests/ios_module_cross.sh > ios.log 2>&1
+          rc=$?
+          cat ios.log
+          if [ $rc -ne 0 ]; then
+            msg=$( (grep -E "error|FAILED|UNEXPECTED|not |Traceback|failed" ios.log | head -40 | cut -c1-300; echo ----; tail -c 2500 ios.log) | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+            echo "::error title=ios module cross build failed::$msg"
+          fi
+          exit $rc
+
