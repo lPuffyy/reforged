@@ -72,5 +72,8 @@ jobs:
           rc=$?
           cat smoke.log
           echo "exit code: $rc"
-          grep -q "guest address space" smoke.log && grep -q "XBE load failed" smoke.log && [ $rc -eq 1 ]
+          if grep -q "guest address space" smoke.log && grep -q "XBE load failed" smoke.log && [ $rc -eq 1 ]; then exit 0; fi
+          msg=$(head -c 6000 smoke.log | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+          echo "::error title=smoke test output (exit $rc)::$msg"
+          exit 1
 
