@@ -1,0 +1,40 @@
+name: ci
+on:
+  push:
+  pull_request:
+
+jobs:
+  hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: No game-derived or private files
+        run: python -I tools/check_clean.py
+
+  compile-windows:
+    runs-on: windows-latest
+    needs: hygiene
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Vulkan headers
+        run: git clone --depth 1 --branch v1.3.280 https://github.com/KhronosGroup/Vulkan-Headers.git vk-headers
+      - name: Generate kernel stubs
+        run: python -I tools/gen_kernel.py
+      - name: Compile (relocated 64-bit layout, no link)
+        shell: cmd
+        run: >
+          cl /nologo /std:c++17 /O1 /MP /EHsc /MT /c /DLIFT_NO_NATIVE /DLIFT_EXPLICIT_MMIO /DWIN32_LEAN_AND_MEAN /DNOMINMAX
+          /Isrc /Ivk-headers\include /Fo:out\
+          src\main.cpp src\kernel.cpp src\kernel2.cpp src\eeprom.cpp src\usb_ohci.cpp src\disc.cpp src\xbe.cpp src\xthread.cpp
+          src\mmio.cpp src\priv.cpp src\nv2a.cpp src\pgraph.cpp src\display.cpp src\gpu_soft.cpp src\gpu_vk.cpp src\vk_shaders.cpp
+          src\vk_ffp.cpp src\crypto.cpp src\des.cpp src\lift_rt.cpp src\guestmem.cpp src\nvnet.cpp src\net.cpp src\bp.cpp
+          src\dsound_hle.cpp src\audio_hle.cpp src\input_hle.cpp src\gen\kernel_stubs.cpp
