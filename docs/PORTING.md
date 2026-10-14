@@ -21,14 +21,15 @@
   translates it, runs it linked into the runtime and again as a separate module loaded through the host function table (`HostApi` in `lift_rt.h`,
   `XBOX_LIFT_MODULE=path`), and checks the output against values computed independently. On the macOS runner the module is also cross-compiled
   and linked for iOS arm64 with the iPhoneOS SDK. Portable builds never request executable memory (W^X on Apple Silicon / iOS).
+- **iOS module builds without Apple's SDK** (CI, Linux runner): `tools/build_module.py` uses plain clang + lld, our own minimal headers
+  (`src/freestanding/`) and `--target=arm64-apple-ios15.0`; the result is checked as an arm64 iOS Mach-O that exports `reforged_module_init` and
+  imports only libc/libm functions (allow-list in `tests/ios_module_cross.sh`). The test program's module builds in 4 seconds.
 
 ## Next (in order)
-1. **Freestanding module build** so the companion can cross-compile for iOS on Windows/Linux without Apple's SDK (own minimal headers for the few libm
-   functions and `memset` the translated code uses, `-nostdlibinc`, lld).
-2. **Companion builder**: desktop tool that takes the user's disc, runs survey + translate + compile, and injects `game.dylib` into the
+1. **Companion builder**: desktop tool that takes the user's disc, runs survey + translate + compile, and injects `game.dylib` into the
    clean app bundle.
-3. **iOS app shell**: Xcode project, Metal/MoltenVK, audio, touch/controller input, disc import. Built in CI on macOS runners (unsigned IPA).
-4. **Per-title data** (hooks, patch lists, vtable addresses) moved out of code into generated per-title files.
+2. **iOS app shell**: Xcode project, Metal/MoltenVK, audio, touch/controller input, disc import. Built in CI on macOS runners (unsigned IPA).
+3. **Per-title data** (hooks, patch lists, vtable addresses) moved out of code into generated per-title files.
 
 ## Known title-specific constants still in code (to move into per-title data)
 - `src/audio_hle.cpp`, `src/dsound_hle.cpp`: address of the stream vtable in the executable.
