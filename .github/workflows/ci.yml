@@ -59,3 +59,18 @@ jobs:
             fi
             exit $rc
           fi
+      - name: Platform layer tests
+        shell: bash
+        run: ctest --test-dir build --output-on-failure -C Release
+      - name: Smoke test (the runtime starts and fails cleanly without a game)
+        shell: bash
+        run: |
+          exe=build/reforged
+          if [ -f build/Release/reforged.exe ]; then exe=build/Release/reforged.exe; fi
+          set +e
+          timeout 60 "$exe" none none 2 > smoke.log 2>&1
+          rc=$?
+          cat smoke.log
+          echo "exit code: $rc"
+          grep -q "guest address space" smoke.log && grep -q "XBE load failed" smoke.log && [ $rc -eq 1 ]
+
