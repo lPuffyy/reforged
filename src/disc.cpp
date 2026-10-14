@@ -4,18 +4,16 @@
 #include <map>
 #include <string>
 #include <vector>
-#include <windows.h>
+#include "plat.h"
 
 namespace {
-HANDLE g_iso = INVALID_HANDLE_VALUE;
+plat::File* g_iso = nullptr;
 uint64_t g_base = 0;
 std::map<std::string, DiscEntry> g_files;  // lower-case path ('/' separated, no leading slash) -> entry
 constexpr uint32_t S = 2048;
 
 bool ReadAt(uint64_t off, void* dst, uint32_t len) {
-  OVERLAPPED ov = {}; ov.Offset = (DWORD)off; ov.OffsetHigh = (DWORD)(off >> 32);
-  DWORD got = 0;
-  return ReadFile(g_iso, dst, len, &got, &ov) && got == len;
+  return plat::FileReadAt(g_iso, dst, len, off) == (int64_t)len;
 }
 std::string Lower(std::string s) { for (char& c : s) c = (char)tolower((unsigned char)c); return s; }
 
@@ -42,8 +40,8 @@ void Walk(uint32_t sector, uint32_t size, const std::string& prefix) {
 }  // namespace
 
 bool DiscOpen(const char* isoPath) {
-  g_iso = CreateFileA(isoPath, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED * 0, nullptr);
-  if (g_iso == INVALID_HANDLE_VALUE) return false;
+  g_iso = plat::FileOpen(isoPath, false, plat::Disp::OpenExisting, nullptr);
+  if (!g_iso) return false;
   for (uint64_t base : {0ull, 0x18300000ull, 0xFD90000ull, 0x2080000ull}) {
     char magic[20];
     if (ReadAt(base + 32 * S, magic, 20) && !memcmp(magic, "MICROSOFT*XBOX*MEDIA", 20)) { g_base = base; break; }

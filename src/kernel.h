@@ -2,6 +2,7 @@
 #pragma once
 #include <cstdint>
 #include <cstdio>
+#include "plat.h"
 
 struct KernelImport { int ordinal; const char* name; char conv; void* fn; int argc; uint32_t ptrMask; };   // ptrMask: bit i set = argument i is a pointer into guest memory (translated by the lift bridge)
 uint32_t HlePtrMask(const char* name);  // conv: s=stdcall f=fastcall c=cdecl v=data variable
@@ -33,7 +34,8 @@ int XThreadPatch(const char* listFile);
 // mmio.cpp: NV2A register window at 0xFD000000
 void MmioInit();
 void KernelDeliverInterrupt(uint32_t vector);  // runs the connected ISR(s) for a vector (kernel.cpp)
-extern void* g_ramMap;
+namespace plat { struct Shm; }
+extern plat::Shm* g_ramMap;
 void PrivInit();  // priv.cpp: emulate port I/O and other privileged instructions
 void PrivDump();
 void DisplayInit();  // display.cpp

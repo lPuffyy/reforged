@@ -3,7 +3,7 @@
 // per-thread KPCR, found through fs:[0x14] (NT_TIB.ArbitraryUserPointer, unused here). fs:[0] (SEH chain) and fs:[4] (stack base) share Windows' layout.
 #include "kernel.h"
 #include "guestmem.h"
-#include <windows.h>
+#include "plat.h"
 #include <cstdio>
 #include <cstring>
 
@@ -39,9 +39,10 @@ void XThreadInit(uint32_t tlsDataSize) {
   XPcrSet(pcrA);
 }
 
+#ifndef LIFT_NO_NATIVE   // x86 machine-code stubs for the native-fallback build
 static void* MakeStub(int reg, int width, uint32_t disp) {
   static uint8_t* pool = nullptr; static size_t used = 0;
-  if (!pool) pool = (uint8_t*)VirtualAlloc(nullptr, 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+  if (!pool) pool = (uint8_t*)plat::VmAlloc(nullptr, 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
   uint8_t* p = pool + used; uint8_t* s = p;
   *s++ = 0x64; *s++ = 0x8B; *s++ = (uint8_t)(0x05 | (reg << 3)); *s++ = 0x14; *s++ = 0; *s++ = 0; *s++ = 0;  // mov reg, fs:[0x14]
   if (width == 4) { *s++ = 0x8B; } else { *s++ = 0x0F; *s++ = 0xB6; }                                          // mov / movzx reg, [reg + disp32]
@@ -49,6 +50,7 @@ static void* MakeStub(int reg, int width, uint32_t disp) {
   *s++ = 0xC3;
   used += 32; return p;
 }
+#endif
 
 #ifdef LIFT_NO_NATIVE
 int XThreadPatch(const char*) { return 0; }   // lifted code reads the thread block through LiftCpu::fsbase: nothing to patch

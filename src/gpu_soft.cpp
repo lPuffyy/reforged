@@ -4,7 +4,7 @@
 // envytools were read as reference).
 #include "kernel.h"
 #include "gpu_soft.h"
-#include <windows.h>
+#include "plat.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -433,7 +433,7 @@ void DrawTriangle(const Surface& surf, const Out& v0, const Out& v1, const Out& 
 
 static void SoftDrawImpl(uint32_t prim, const SoftVertex* verts, size_t n);
 void SoftDraw(uint32_t prim, const SoftVertex* verts, size_t n) {
-  DWORD t0 = GetTickCount(); SoftDrawImpl(prim, verts, n); DWORD dt = GetTickCount() - t0;
+  uint32_t t0 = (uint32_t)plat::TickMs(); SoftDrawImpl(prim, verts, n); uint32_t dt = (uint32_t)plat::TickMs() - t0;
   static int slowLog = 40; if (dt > 150 && slowLog > 0) { --slowLog; Log("[soft] SLOW draw: prim=%u vertices=%zu took %lu ms (tex0=0x%08x fmt, mode=0x%x, stages=%u, blend=%u, depth=%u)", prim, n, dt, R(0x1B04), R(0x1E94), R(0x1E60) & 0xFF, R(0x304), R(0x30C)); }
 }
 static void SoftDrawImpl(uint32_t prim, const SoftVertex* verts, size_t n) {

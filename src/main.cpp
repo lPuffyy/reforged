@@ -2,14 +2,23 @@
 #include "kernel.h"
 #include "guestmem.h"
 #include "xbe.h"
+#include "plat.h"
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #include <tlhelp32.h>
-#include <intrin.h>
+#endif
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
 extern "C" void LiftDumpRing(); extern "C" bool LiftQuiet();
+#ifdef _WIN32
 #ifndef LIFT_NO_NATIVE
 static LONG WINAPI CrashFilter(EXCEPTION_POINTERS* ep) {
   if (LiftQuiet()) return EXCEPTION_CONTINUE_SEARCH;
@@ -64,20 +73,25 @@ static LONG WINAPI CrashFilter(EXCEPTION_POINTERS* ep) {   // portable: just rep
   LiftDumpRing(); Log("[crash] exception 0x%08lx at %p", r->ExceptionCode, r->ExceptionAddress); return EXCEPTION_CONTINUE_SEARCH;
 }
 #endif
+#else
+static void PortableCrash(const char* what, uintptr_t addr, uintptr_t ip) { LiftDumpRing(); Log("[crash] %s at address %p (ip %p)", what, (void*)addr, (void*)ip); fflush(stdout); }
+#endif
 
 
 // Debug aid: XBOX_PROF=1 samples every thread's EIP ~1000x/s and writes work/prof.txt ("tid-class rva count") at exit; resolve RVAs with tools/prof_resolve.py + work/build/host.map.
 #include <map>
 #include <vector>
-static std::map<std::pair<DWORD, DWORD>, unsigned> g_prof;   // (tid, eip>>4) -> samples
+static std::map<std::pair<uint32_t, uint32_t>, unsigned> g_prof;   // (tid, eip>>4) -> samples
 static volatile bool g_profStop = false;
 
 // Debug aid: with XBOX_DUMPTHREADS=1, creating work/dump_threads.flag makes every thread log its EIP and the code-looking words on its stack (who is waiting on what).
 void KernelSetTrace(bool on);
-static DWORD WINAPI DumpThread(void*) {
+static uint32_t DumpThread(void*) {
+#ifndef LIFT_NO_NATIVE
   DWORD me = GetCurrentThreadId(), pid = GetCurrentProcessId();
+#endif
   for (;;) {
-    Sleep(500);
+    plat::SleepMs(500);
     if (FILE* t = fopen("work/trace_on.flag", "rb")) { fclose(t); remove("work/trace_on.flag"); KernelSetTrace(true); Log("[threads] kernel trace ON"); }
     if (FILE* t = fopen("work/trace_off.flag", "rb")) { fclose(t); remove("work/trace_off.flag"); KernelSetTrace(false); Log("[threads] kernel trace OFF"); }
     FILE* f = fopen("work/dump_threads.flag", "rb"); if (!f) continue; fclose(f); remove("work/dump_threads.flag");
@@ -101,7 +115,7 @@ static DWORD WINAPI DumpThread(void*) {
 }
 
 #ifndef LIFT_NO_NATIVE
-static DWORD WINAPI ProfThread(void*) {
+static uint32_t ProfThread(void*) {
   DWORD me = GetCurrentThreadId(), pid = GetCurrentProcessId(); std::vector<DWORD> tids; DWORD lastScan = 0;
   while (!g_profStop) {
     if (GetTickCount() - lastScan > 250) { lastScan = GetTickCount(); tids.clear(); HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0); THREADENTRY32 te{sizeof te}; for (BOOL ok = Thread32First(snap, &te); ok; ok = Thread32Next(snap, &te)) if (te.th32OwnerProcessID == pid && te.th32ThreadID != me) tids.push_back(te.th32ThreadID); CloseHandle(snap); }
@@ -139,7 +153,7 @@ static void DumpThreads(const char* why) {
   CloseHandle(snap);
 }
 #else
-static DWORD WINAPI ProfThread(void*) { return 0; }
+static uint32_t ProfThread(void*) { return 0; }
 static void ProfDump() {}
 static void DumpThreads(const char*) {}   // thread sampling reads x86 register contexts
 #endif
@@ -148,16 +162,17 @@ void Nv2aDump();
 void LaunchPageInit();
 void KernelSetImageName(const char* hostXbe);
 bool LiftEnabled(); void LiftInit(const char*); uint32_t KernelImportAddr(const KernelImport* k);
-static DWORD WINAPI EntryThread(void* p) {
-  typedef void(__stdcall * Entry)();
+static uint32_t EntryThread(void* p) {
+  typedef void(PLAT_STDCALL * Entry)();
   XThreadInit(0);
-  Log("[boot] jumping to the XBE entry point 0x%x (tid %lu)", (unsigned)(uintptr_t)p, GetCurrentThreadId());
+  Log("[boot] jumping to the XBE entry point 0x%x (tid %u)", (unsigned)(uintptr_t)p, plat::ThreadId());
   if (LiftEnabled()) GuestCall((uint32_t)(uintptr_t)p, 0); else ((Entry)p)();
-  Log("[boot] entry point returned (tid %lu)", GetCurrentThreadId());
+  Log("[boot] entry point returned (tid %u)", plat::ThreadId());
   return 0;
 }
 
 // Last-chance handler: no Windows "application error" dialog; log the fault and exit so unattended runs never block on a message box.
+#ifdef _WIN32
 #ifndef LIFT_NO_NATIVE
 static LONG WINAPI FatalFilter(EXCEPTION_POINTERS* ep) {
   Log("[fatal] module base 0x%08lx, eip rva 0x%lx", (unsigned long)(uintptr_t)GetModuleHandleA(nullptr), (unsigned long)(ep->ContextRecord->Eip - (uintptr_t)GetModuleHandleA(nullptr)));
@@ -170,10 +185,13 @@ static LONG WINAPI FatalFilter(EXCEPTION_POINTERS* ep) {
   fflush(stdout); TerminateProcess(GetCurrentProcess(), 3); return EXCEPTION_EXECUTE_HANDLER;
 }
 #endif
+#endif
 
 int main(int argc, char** argv) {
+#ifdef _WIN32
   SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
   SetUnhandledExceptionFilter(FatalFilter);
+#endif
   const char* iso = argc > 1 ? argv[1] : "work/title/game.iso";
   const char* xbe = argc > 2 ? argv[2] : "work/title/default.xbe";
   GuestMemInit();
@@ -181,7 +199,11 @@ int main(int argc, char** argv) {
   MmioInit();
   DisplayInit();
   PrivInit();
+#ifdef _WIN32
   AddVectoredExceptionHandler(1, CrashFilter);
+#else
+  plat::InstallCrashHandler(PortableCrash);
+#endif
   if (strcmp(iso, "none") != 0 && !DiscOpen(iso)) { Log("cannot open disc image %s", iso); return 1; }   // "none": no disc in the drive (e.g. running the dashboard)
   XbeInfo info{}; char err[256];
   extern bool KernelContigOk();
@@ -190,11 +212,13 @@ int main(int argc, char** argv) {
     // With ASLR the low 5.5 MB are usually free, but the OS sometimes drops a mapping there: start over (a fresh process re-rolls the layout).
     int attempt = getenv("XBOX_ATTEMPT") ? atoi(getenv("XBOX_ATTEMPT")) : 0;
     Log("XBE load failed (attempt %d): %s", attempt, err);
-    if (attempt < 30) {
+#if defined(_WIN32) && defined(GUEST_IDENTITY)
+    if (attempt < 30) {   // identity builds need fixed low addresses: start over (a fresh process re-rolls the layout)
       char num[16]; sprintf(num, "%d", attempt + 1); SetEnvironmentVariableA("XBOX_ATTEMPT", num);
       STARTUPINFOA si{sizeof si}; PROCESS_INFORMATION pi{};
       if (CreateProcessA(nullptr, GetCommandLineA(), nullptr, nullptr, TRUE, 0, nullptr, nullptr, &si, &pi)) { WaitForSingleObject(pi.hProcess, INFINITE); DWORD code = 0; GetExitCodeProcess(pi.hProcess, &code); return (int)code; }
     }
+#endif
     return 1;
   }
   // Patch the kernel thunk table: each entry 0x80000000|ordinal -> address of our implementation / exported variable.
@@ -214,17 +238,17 @@ int main(int argc, char** argv) {
   LaunchPageInit();
   BpInit();
   LiftInit(xbe);
-  HANDLE t = CreateThread(nullptr, 4 << 20, EntryThread, (void*)(uintptr_t)info.entry, 0, nullptr);
+  plat::ThreadStart(EntryThread, (void*)(uintptr_t)info.entry, 4 << 20, false, nullptr);
   // The entry thread usually just starts the title thread and returns; run until the title exits (HalReturnToFirmware etc.) or the time limit.
   int seconds = argc > 3 ? atoi(argv[3]) : 30;
-  if (getenv("XBOX_PROF")) CreateThread(nullptr, 0, ProfThread, nullptr, 0, nullptr);
-  if (getenv("XBOX_DUMPTHREADS")) CreateThread(nullptr, 0, DumpThread, nullptr, 0, nullptr);
-  for (int i = 0; i < seconds; i++) { Sleep(1000); if (getenv("XBOX_SAMPLE") && i % 3 == 2) DumpThreads("sample"); }
+  if (getenv("XBOX_PROF")) plat::ThreadSpawn(ProfThread);
+  if (getenv("XBOX_DUMPTHREADS")) plat::ThreadSpawn(DumpThread);
+  for (int i = 0; i < seconds; i++) { plat::SleepMs(1000); if (getenv("XBOX_SAMPLE") && i % 3 == 2) DumpThreads("sample"); }
   if (getenv("XBOX_PROF")) ProfDump();
   DumpThreads("final");
   PrivDump();
   Nv2aDump();
   Log("[boot] time limit reached, exiting");
   fflush(stdout);
-  TerminateProcess(GetCurrentProcess(), 0);
+  _Exit(0);   // other threads are still running: do not run static destructors
 }

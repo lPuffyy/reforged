@@ -26,4 +26,5 @@ uint32_t HandleNew(void* h); void* HandleGet(uint32_t v); void* HandleRelease(ui
 void* GuestVirtualAlloc(uint32_t size, uint32_t type, uint32_t prot);
 // Per-thread KPCR pointer (guest address). On Win32 x86 it is also mirrored in fs:[0x14] for the native-fallback stubs.
 uint32_t XPcrGet(); void XPcrSet(uint32_t pcr);
+bool GuestPtrOk(const void* p, size_t n);   // [p, p+n) is committed, readable host memory inside the guest address space (device DMA safety checks)
 void GuestMemInit();   // pick the guest base (non-identity builds); call before any guest memory is touched

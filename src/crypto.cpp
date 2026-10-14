@@ -5,7 +5,7 @@
 #include <cstdlib>
 #include <vector>
 
-#define KFN(name, ...) extern "C" uint32_t __stdcall K_##name(__VA_ARGS__)
+#define KFN(name, ...) extern "C" uint32_t PLAT_STDCALL K_##name(__VA_ARGS__)
 
 namespace {
 struct Sha1 { uint32_t h[5]; uint64_t bits; uint8_t buf[64]; uint32_t used; };

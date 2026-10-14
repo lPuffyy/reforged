@@ -4,7 +4,7 @@
 // ExQueryNonVolatileSetting serves it: user settings 0..0x12 as DWORDs, 0x100 serial, 0x101 MAC, 0x102 online key, 0x103 video standard, 0xFFFF the whole image.
 #define _CRT_RAND_S
 #include "kernel.h"
-#include <windows.h>
+#include "plat.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>

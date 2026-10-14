@@ -6,10 +6,17 @@
 - Static translator and survey; the relocated build runs a real title through its menus and gameplay.
 - Kernel/DirectSound/input HLE, NV2A to Vulkan renderer, NIC emulation with a UDP relay for LAN play.
 
+- **Platform layer** (`src/plat.h`, `plat_win.cpp`, `plat_posix.cpp`): time, threads, waitable objects (events/semaphores/mutexes/threads),
+  virtual memory, shared memory aliases, files and directories, dynamic libraries, audio output, process spawning, crash handler. The
+  runtime no longer includes `windows.h` outside the Windows backends (`plat_win`, `input_win`, `display_win`) and the native-fallback
+  debugging code that only exists in the 32-bit identity build.
+- **Backends split by platform**: `display.h` (window/Vulkan surface), `input.h` (pad state: XInput + keyboard on Windows, pushed by the
+  app shell elsewhere), `net_sock.h` (Winsock vs BSD sockets).
+- **Portable build**: `CMakeLists.txt` (`LIFT_NO_NATIVE`, `LIFT_EXPLICIT_MMIO`); CI builds it on Windows x64, Linux x64 and Linux arm64.
+
 ## Next (in order)
-1. **Win32 abstraction**: put threads, events, semaphores, timers, files, memory and time behind a small `plat_*` layer so the
-   runtime compiles without `windows.h`. GPU/window/audio stay platform-specific (replaced by the app shell on iOS).
-2. **Linux arm64 CI job**: compile and run the portable core with sse2neon (CI on `ubuntu-24.04-arm`).
+1. **Fix what the first Linux/arm64 CI runs find** (the POSIX layer has only been written, not yet compiled on a real POSIX toolchain).
+2. **Make the framebuffer/PRAMIN aliases work without shared mappings** (iOS has no `memfd`; route those windows through explicit MMIO instead).
 3. **arm64 translated module**: freestanding C (no libc), host function table, built with clang + lld on the user's PC.
 4. **Companion builder**: desktop tool that takes the user's disc, runs survey + translate + compile, and injects `game.dylib` into the
    clean app bundle.

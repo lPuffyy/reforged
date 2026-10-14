@@ -4,7 +4,7 @@
 // Register meanings follow the hardware as documented by xemu's nvnet (read as reference); the implementation is our own.
 #include "kernel.h"
 #include "guestmem.h"
-#include <windows.h>
+#include "plat.h"
 #include <cstdio>
 #include <cstring>
 #include <deque>
@@ -17,7 +17,7 @@ void NetBackendLinkUp();                                 // net.cpp: the guest e
 
 namespace {
 struct Desc { uint32_t buf; uint16_t length, flags; };
-static bool DmaOk(const void* p, size_t n);
+static bool DmaOk(const void* p, size_t n) { return GuestPtrOk(p, n); }
 constexpr uint16_t TX_LASTPACKET = 1 << 0, TX_VALID = 1 << 15, RX_AVAIL = 1 << 15, RX_DESCVALID = 1 << 0, RX_BIT4 = 1 << 4;
 constexpr uint32_t R_IRQ_STATUS = 0x000, R_IRQ_MASK = 0x004, R_TXCTL = 0x084, R_RXCTL = 0x094, R_MACA = 0x0A8, R_MACB = 0x0AC, R_TXRING = 0x100, R_RXRING = 0x104, R_RINGSIZE = 0x108,
                    R_TXCUR = 0x11C, R_RXCUR = 0x120, R_REG5 = 0x130, R_TXNEXT = 0x134, R_RXNEXT = 0x138, R_TXRXCTL = 0x144, R_MIISTATUS = 0x180, R_ADAPTER = 0x188, R_MDIOADDR = 0x190, R_MDIODATA = 0x194;
@@ -25,7 +25,7 @@ constexpr uint32_t IRQ_RX = 2, IRQ_TX = 0x10, IRQ_MII = 0x40;
 
 std::recursive_mutex g_mx; uint32_t g_regs[0x100]; uint16_t g_phy[6]; bool g_init = false;
 std::vector<uint8_t> g_txAssemble; std::deque<std::vector<uint8_t>> g_rxQueue;
-HANDLE g_evt = nullptr; bool g_thread = false; int g_log = 80, g_frameLog = 300; bool g_logFrames = getenv("XBOX_NET_LOG") != nullptr;
+plat::Obj* g_evt = nullptr; bool g_thread = false; int g_log = 80, g_frameLog = 300; bool g_logFrames = getenv("XBOX_NET_LOG") != nullptr;
 
 uint32_t& Rg(uint32_t off) { return g_regs[off >> 2]; }
 void PhyInit() {
@@ -37,7 +37,7 @@ uint32_t TxRingSize() { return (Rg(R_RINGSIZE) & 0xFFFF) + 1; }
 uint32_t RxRingSize() { return (Rg(R_RINGSIZE) >> 16) + 1; }
 bool LinkUp() { return (g_phy[1] & 4) != 0; }
 
-void Irq() { if (g_evt) SetEvent(g_evt); }
+void Irq() { if (g_evt) plat::EventSet(g_evt); }
 void SetStatus(uint32_t bits) { Rg(R_IRQ_STATUS) |= bits; Irq(); }
 void ResetRings() { Rg(R_TXCUR) = Rg(R_TXNEXT) = Rg(R_TXRING); Rg(R_RXCUR) = Rg(R_RXNEXT) = Rg(R_RXRING); }
 
@@ -59,7 +59,7 @@ void ServiceTx() {
   for (uint32_t i = 0; i < TxRingSize(); i++) {
     uint32_t cur = CurTx(); Desc* d = DescAt(cur); uint32_t len = (uint32_t)d->length + 1;
     if (!(d->flags & TX_VALID)) break;
-    { static int dl = 0; if (g_logFrames && dl++ < 12) { const uint8_t* b = Dma(d->buf); static const uint8_t zero20[24] = {}; if (IsBadReadPtr(b, 20)) b = zero20; Log("[nvnet] TX desc @0x%x buf=0x%x len=%u flags=0x%04x data %02x%02x%02x%02x %02x%02x%02x%02x %02x%02x%02x%02x %02x%02x%02x%02x %02x%02x%02x%02x", cur, d->buf, len, d->flags, b[0],b[1],b[2],b[3],b[4],b[5],b[6],b[7],b[8],b[9],b[10],b[11],b[12],b[13],b[14],b[15],b[16],b[17],b[18],b[19]); } }
+    { static int dl = 0; if (g_logFrames && dl++ < 12) { const uint8_t* b = Dma(d->buf); static const uint8_t zero20[24] = {}; if (!GuestPtrOk(b, 20)) b = zero20; Log("[nvnet] TX desc @0x%x buf=0x%x len=%u flags=0x%04x data %02x%02x%02x%02x %02x%02x%02x%02x %02x%02x%02x%02x %02x%02x%02x%02x %02x%02x%02x%02x", cur, d->buf, len, d->flags, b[0],b[1],b[2],b[3],b[4],b[5],b[6],b[7],b[8],b[9],b[10],b[11],b[12],b[13],b[14],b[15],b[16],b[17],b[18],b[19]); } }
     if (len <= 1600 && DmaOk(Dma(d->buf), len)) { size_t o = g_txAssemble.size(); g_txAssemble.resize(o + len); memcpy(&g_txAssemble[o], Dma(d->buf), len); }   // buffer addresses >= 64 MB are host pointers (guest ptr == host ptr)
     bool last = d->flags & TX_LASTPACKET;
     if (last) { LogFrame("TX", g_txAssemble.data(), (uint32_t)g_txAssemble.size()); NetBackendTx(g_txAssemble.data(), (uint32_t)g_txAssemble.size()); g_txAssemble.clear(); sent = true; }
@@ -71,7 +71,6 @@ void ServiceTx() {
 }
 
 // A stale descriptor (the guest freed or reused the ring after stopping the NIC) can hold any address: only touch committed memory.
-static bool DmaOk(const void* p, size_t n) { MEMORY_BASIC_INFORMATION mi; return VirtualQuery(p, &mi, sizeof mi) && mi.State == MEM_COMMIT && !(mi.Protect & (PAGE_NOACCESS | PAGE_GUARD)) && (const uint8_t*)p + n <= (const uint8_t*)mi.BaseAddress + mi.RegionSize; }
 // Copy queued frames into free RX descriptors
 void DeliverRx() {
   while (!g_rxQueue.empty()) {
@@ -89,26 +88,26 @@ void DeliverRx() {
   }
 }
 
-DWORD WINAPI NicThread(void*) {
+uint32_t NicThread(void*) {
   XThreadInit(0);   // the guest ISR runs here
   for (;;) {
-    WaitForSingleObject(g_evt, 50);
+    plat::Wait(g_evt, 50);
     { std::lock_guard<std::recursive_mutex> l(g_mx); DeliverRx(); }
     for (int i = 0; i < 64; i++) {
       bool pending; { std::lock_guard<std::recursive_mutex> l(g_mx); pending = (Rg(R_IRQ_STATUS) & Rg(R_IRQ_MASK)) != 0; }
       if (!pending) break;
-      KernelDeliverInterrupt(0x34); Sleep(0);
+      KernelDeliverInterrupt(0x34); plat::SleepMs(0);
     }
   }
 }
-void Start() { if (!g_thread) { g_thread = true; g_evt = CreateEventA(nullptr, FALSE, FALSE, nullptr); CreateThread(nullptr, 0, NicThread, nullptr, 0, nullptr); } }
+void Start() { if (!g_thread) { g_thread = true; g_evt = plat::EventNew(false, false); plat::ThreadSpawn(NicThread); } }
 }  // namespace
 
 // Backend -> guest: queue a received Ethernet frame (any thread)
 void NvnetReceive(const uint8_t* frame, uint32_t len) {
   if (len < 14 || len > 1600) return;
   { std::lock_guard<std::recursive_mutex> l(g_mx); if (g_rxQueue.size() > 256) g_rxQueue.pop_front(); g_rxQueue.emplace_back(frame, frame + len); }
-  if (g_evt) SetEvent(g_evt);
+  if (g_evt) plat::EventSet(g_evt);
 }
 uint32_t NvnetMac(uint8_t* mac) { std::lock_guard<std::recursive_mutex> l(g_mx); uint32_t a = Rg(R_MACA), b = Rg(R_MACB); for (int i = 0; i < 4; i++) mac[i] = (uint8_t)(a >> (8 * i)); mac[4] = (uint8_t)b; mac[5] = (uint8_t)(b >> 8); return a | b; }
 

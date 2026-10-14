@@ -3,7 +3,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <windows.h>
+#include "plat.h"
 
 bool XbeLoad(const char* path, XbeInfo* info, char* err, size_t errLen) {
   FILE* f = fopen(path, "rb");
@@ -24,8 +24,8 @@ bool XbeLoad(const char* path, XbeInfo* info, char* err, size_t errLen) {
   if (!kind) { snprintf(err, errLen, "entry point matches no known key"); return false; }
   // Reserve the whole image range at the XBE's own address: guest pointers are host pointers.
   uint32_t alloc = (imgSize + 0xFFF) & ~0xFFFu;
-  if (!VirtualAlloc(G(base), alloc, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE)) {
-    snprintf(err, errLen, "cannot map image at 0x%x size 0x%x (error %lu)", base, alloc, GetLastError());
+  if (!plat::VmAlloc(G(base), alloc, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE)) {
+    snprintf(err, errLen, "cannot map image at 0x%x size 0x%x", base, alloc);
     return false;
   }
   uint32_t hdrSize = u32(0x108); memcpy(G(base), file, hdrSize < (uint32_t)n ? hdrSize : n);

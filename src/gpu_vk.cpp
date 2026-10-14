@@ -2,14 +2,13 @@
 // the vertex program and the register combiners are translated to SPIR-V (vk_shaders.cpp) and cached; textures are decoded on the CPU to BGRA8 and cached
 // by content hash; render targets live in GPU images and are presented at the title's buffer swap.
 #define VK_NO_PROTOTYPES
-#define VK_USE_PLATFORM_WIN32_KHR
 #include "kernel.h"
+#include "display.h"
+#include "plat.h"
 #include "gpu_soft.h"
 #include "gpu_vk.h"
 #include "vk_shaders.h"
 #include <vulkan/vulkan.h>
-#include <windows.h>
-#include <intrin.h>
 #include <algorithm>
 #include <array>
 #include <cstdio>
@@ -25,13 +24,12 @@
 uint32_t Pgraph3dState(uint32_t method);
 const uint32_t* Pgraph3dProgram();
 const float* Pgraph3dConstants();
-HWND DisplayWindow();
 bool SoftDecodeTexture(int stage, std::vector<uint32_t>* bgra, int* w, int* h, uint64_t* hash, bool* linear);
 
 #define VK_FUNCS(X) \
   X(vkDestroyInstance) X(vkEnumeratePhysicalDevices) X(vkGetPhysicalDeviceProperties) X(vkGetPhysicalDeviceMemoryProperties) X(vkGetPhysicalDeviceQueueFamilyProperties) \
   X(vkGetPhysicalDeviceSurfaceSupportKHR) X(vkGetPhysicalDeviceSurfaceCapabilitiesKHR) X(vkGetPhysicalDeviceSurfaceFormatsKHR) X(vkGetPhysicalDeviceSurfacePresentModesKHR) \
-  X(vkCreateWin32SurfaceKHR) X(vkDestroySurfaceKHR) X(vkCreateDevice) X(vkGetDeviceProcAddr) X(vkGetPhysicalDeviceFeatures)
+  X(vkDestroySurfaceKHR) X(vkCreateDevice) X(vkGetDeviceProcAddr) X(vkGetPhysicalDeviceFeatures)
 #define VK_DEV_FUNCS(X) \
   X(vkDestroyDevice) X(vkGetDeviceQueue) X(vkCreateSwapchainKHR) X(vkDestroySwapchainKHR) X(vkGetSwapchainImagesKHR) X(vkAcquireNextImageKHR) X(vkQueuePresentKHR) \
   X(vkCreateBuffer) X(vkDestroyBuffer) X(vkGetBufferMemoryRequirements) X(vkAllocateMemory) X(vkFreeMemory) X(vkBindBufferMemory) X(vkMapMemory) \
@@ -107,12 +105,12 @@ void Barrier(VkCommandBuffer cb, Img& im, VkImageLayout to, VkImageAspectFlags a
 
 // ---------------- init ----------------
 bool InitVulkan() {
-  HMODULE lib = LoadLibraryA("vulkan-1.dll"); if (!lib) { Log("[vk] vulkan-1.dll not found"); return false; }
-  pGetInstanceProcAddr = (PFN_vkGetInstanceProcAddr)GetProcAddress(lib, "vkGetInstanceProcAddr");
+  void* lib = plat::LoadLib(DisplayVulkanLibrary()); if (!lib) { Log("[vk] %s not found", DisplayVulkanLibrary()); return false; }
+  pGetInstanceProcAddr = (PFN_vkGetInstanceProcAddr)plat::LibSym(lib, "vkGetInstanceProcAddr");
   pCreateInstance = (PFN_vkCreateInstance)pGetInstanceProcAddr(nullptr, "vkCreateInstance");
   VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO}; app.pApplicationName = "xbox-recomp"; app.apiVersion = VK_API_VERSION_1_3;
-  const char* iext[] = {"VK_KHR_surface", "VK_KHR_win32_surface"};
-  VkInstanceCreateInfo ici{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO}; ici.pApplicationInfo = &app; ici.enabledExtensionCount = 2; ici.ppEnabledExtensionNames = iext;
+  const char* iext[8]; int iextCount = DisplayVulkanExtensions(iext, 8);
+  VkInstanceCreateInfo ici{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO}; ici.pApplicationInfo = &app; ici.enabledExtensionCount = (uint32_t)iextCount; ici.ppEnabledExtensionNames = iext;
   if (pCreateInstance(&ici, nullptr, &g_inst) != VK_SUCCESS) { Log("[vk] vkCreateInstance failed"); return false; }
 #define LOADI(n) n = (PFN_##n)pGetInstanceProcAddr(g_inst, #n);
   VK_FUNCS(LOADI)
@@ -122,10 +120,7 @@ bool InitVulkan() {
   g_phys = pds[0]; for (auto d : pds) { VkPhysicalDeviceProperties p; vkGetPhysicalDeviceProperties(d, &p); if (p.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) { g_phys = d; break; } }
   vkGetPhysicalDeviceProperties(g_phys, &g_props); vkGetPhysicalDeviceMemoryProperties(g_phys, &g_memProps); g_ubAlign = (uint32_t)std::max<VkDeviceSize>(16, g_props.limits.minUniformBufferOffsetAlignment);
   Log("[vk] using %s (API %u.%u)", g_props.deviceName, VK_VERSION_MAJOR(g_props.apiVersion), VK_VERSION_MINOR(g_props.apiVersion));
-  HWND hwnd = DisplayWindow(); for (int i = 0; i < 200 && !hwnd; i++) { Sleep(50); hwnd = DisplayWindow(); }
-  if (!hwnd) { Log("[vk] no window"); return false; }
-  VkWin32SurfaceCreateInfoKHR sci{VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR}; sci.hinstance = GetModuleHandleA(nullptr); sci.hwnd = hwnd;
-  CHK(vkCreateWin32SurfaceKHR(g_inst, &sci, nullptr, &g_surface));
+  if (!DisplayCreateSurface((void*)g_inst, (void*)pGetInstanceProcAddr, &g_surface)) { Log("[vk] no window surface"); return false; }
   uint32_t qn = 0; vkGetPhysicalDeviceQueueFamilyProperties(g_phys, &qn, nullptr); std::vector<VkQueueFamilyProperties> qf(qn); vkGetPhysicalDeviceQueueFamilyProperties(g_phys, &qn, qf.data());
   g_qfam = ~0u; for (uint32_t i = 0; i < qn; i++) { VkBool32 sup = 0; vkGetPhysicalDeviceSurfaceSupportKHR(g_phys, i, g_surface, &sup); if ((qf[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) && sup) { g_qfam = i; break; } }
   if (g_qfam == ~0u) { Log("[vk] no graphics+present queue"); return false; }
@@ -211,7 +206,7 @@ bool UploadTexture(int stage, TexEntry** out) {
   auto it = g_texCache.find(key);
   if (it != g_texCache.end()) { it->second.lastUsed = g_frameNo; *out = &it->second; return true; }
   SoftDecodeTexture(stage, &bgra, &w, &h, &hash, &linear);
-  { static int nd = 0; static std::set<uint64_t> seenTex; uint64_t sk = ((uint64_t)R(0x1B00 + 64 * stage) << 32) ^ ((uint64_t)R(0x1B04 + 64 * stage) << 8) ^ ((uint64_t)w << 16) ^ (uint64_t)h; if (w == 1024 && h <= 16 && getenv("XBOX_TEXDUMP_STRIPS")) sk ^= hash * 0x9E3779B97F4A7C15ull; if (getenv("XBOX_TEXDUMP") && nd < 150 && seenTex.insert(sk).second) { char path[100]; sprintf(path, "work/tex/t%03d.bmp", nd); CreateDirectoryA("work/tex", nullptr); DumpBmp(path, bgra.data(), w, h);
+  { static int nd = 0; static std::set<uint64_t> seenTex; uint64_t sk = ((uint64_t)R(0x1B00 + 64 * stage) << 32) ^ ((uint64_t)R(0x1B04 + 64 * stage) << 8) ^ ((uint64_t)w << 16) ^ (uint64_t)h; if (w == 1024 && h <= 16 && getenv("XBOX_TEXDUMP_STRIPS")) sk ^= hash * 0x9E3779B97F4A7C15ull; if (getenv("XBOX_TEXDUMP") && nd < 150 && seenTex.insert(sk).second) { char path[100]; sprintf(path, "work/tex/t%03d.bmp", nd); plat::MakeDir("work/tex"); DumpBmp(path, bgra.data(), w, h);
       Log("[tex] #%d stage %d offset=0x%x fmt=0x%08x size=%dx%d linear=%d -> %s", nd, stage, R(0x1B00 + 64 * stage), R(0x1B04 + 64 * stage), w, h, (int)linear, path); ++nd; } }
   EndRendering();
   TexEntry e; e.img = MakeImg(w, h, VK_FORMAT_B8G8R8A8_UNORM, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_IMAGE_ASPECT_COLOR_BIT); e.hash = hash; e.lastUsed = g_frameNo; e.linear = linear;
@@ -340,7 +335,7 @@ static int g_lastFrameDraws = 0, g_tailK = -1, g_ovSwitches = 0, g_ovSince = 0, 
 static int g_frameDraws = 0;   // draws issued since the last flip (debug: XBOX_MAXDRAW / XBOX_MINDRAW / XBOX_BIGLOG)
 static uint64_t g_tTexUs = 0, g_tDescUs = 0, g_tGeomUs = 0, g_tShaderUs = 0;
 static uint64_t g_statDraws = 0, g_statDrawUs = 0, g_statFlipUs = 0, g_statFlips = 0, g_statT0 = 0;
-static uint64_t NowUs() { LARGE_INTEGER f, c; QueryPerformanceFrequency(&f); QueryPerformanceCounter(&c); return (uint64_t)(c.QuadPart * 1000000ull / f.QuadPart); }
+static uint64_t NowUs() { return plat::PerfCounter() * 1000000ull / plat::PerfFreq(); }
 
 bool GpuVkReady() {
   if (g_ok) return true; if (g_tried) return false; g_tried = true;
@@ -385,15 +380,15 @@ static int g_capSweep = -1;   // XBOX_CAPSWEEP=startSeconds: one launch, per-fra
    // draws issued since the last flip (debug: XBOX_MAXDRAW / XBOX_MINDRAW bisect which draw produces an artefact)
 static void GpuDrawImpl(uint32_t prim, const SoftVertex* verts, size_t n) {
   { static const char* bl = getenv("XBOX_BANDLOG"); static int nlog = 0;   // XBOX_BANDLOG=y0,y1[,afterSeconds]: log draws whose screen bbox overlaps rows y0..y1 (frame after the title appears)
-    if (bl && nlog < 60) { int a = 0, b = 0, after = 0; sscanf(bl, "%d,%d,%d", &a, &b, &after); static DWORD t0 = GetTickCount(); if ((int)(GetTickCount() - t0) > after * 1000) { float bx0, by0, bx1, by1;
+    if (bl && nlog < 60) { int a = 0, b = 0, after = 0; sscanf(bl, "%d,%d,%d", &a, &b, &after); static uint32_t t0 = (uint32_t)plat::TickMs(); if ((int)((uint32_t)plat::TickMs() - t0) > after * 1000) { float bx0, by0, bx1, by1;
       if (SoftScreenBBox(verts, n, &bx0, &by0, &bx1, &by1) && by1 >= a && by0 <= b && bx1 - bx0 > 150 && by1 - by0 < 40) { ++nlog; Log("[band] draw #%d prim=%u n=%zu bbox=(%.0f,%.0f)-(%.0f,%.0f) tex0 off=0x%x fmt=0x%08x tex1 off=0x%x tex2 off=0x%x mode=0x%x blend=%u src=%x dst=%x ps=%08x/%08x/%u", g_frameDraws, prim, n, bx0, by0, bx1, by1, R(0x1B00), R(0x1B04), R(0x1B40), R(0x1B80), R(0x1E70), R(0x304), R(0x344), R(0x348), R(0x288), R(0x28C), R(0x1E60) & 0xFF); } } } }
   { static const char* bg = getenv("XBOX_BIGLOG"); static int nb = 0;   // XBOX_BIGLOG=minDrawIdx,afterSeconds: log large (>= 60% of screen) draws after that draw index within a frame
-    if (bg && nb < 90) { int mi = 0, after = 0, mx2 = 1 << 30; sscanf(bg, "%d,%d,%d", &mi, &after, &mx2); static DWORD t0 = GetTickCount(); if (g_frameDraws >= mi && g_frameDraws <= mx2 && (int)(GetTickCount() - t0) > after * 1000) { float bx0, by0, bx1, by1;
+    if (bg && nb < 90) { int mi = 0, after = 0, mx2 = 1 << 30; sscanf(bg, "%d,%d,%d", &mi, &after, &mx2); static uint32_t t0 = (uint32_t)plat::TickMs(); if (g_frameDraws >= mi && g_frameDraws <= mx2 && (int)((uint32_t)plat::TickMs() - t0) > after * 1000) { float bx0, by0, bx1, by1;
       float bfo[16] = {}, bp[4], bd1[4], bt0[4]; SoftFirstVertexOut(verts, n, bp, bfo, bd1, bt0); memcpy(bfo + 8, bt0, 16);
       if (SoftScreenBBox(verts, n, &bx0, &by0, &bx1, &by1) && (mx2 < (1 << 30) || ((std::min(bx1, 640.f) - std::max(bx0, 0.f)) > 60 && (std::min(by1, 480.f) - std::max(by0, 0.f)) > 40))) { ++nb;
         Log("[big] draw #%d prim=%u n=%zu bbox=(%.0f,%.0f)-(%.0f,%.0f) blend=%u src=%x dst=%x depth=%u alphatest=%u mode=0x%x tex0 off=0x%x fmt=0x%08x ps=%08x/%08x/%u mask=%08x [vtx0 in.a3=(%.2f %.2f %.2f %.2f) out.d0=(%.2f %.2f %.2f %.2f) out.t0=(%.2f %.2f)] icwA=%08x,%08x ocwA=%08x,%08x icwC=%08x,%08x ocwC=%08x,%08x cc=%08x", g_frameDraws, prim, n, bx0, by0, bx1, by1, R(0x304), R(0x344), R(0x348), R(0x30C), R(0x300), R(0x1E70), R(0x1B00), R(0x1B04), R(0x288), R(0x28C), R(0x1E60) & 0xFF, R(0x358), verts[0].a[3][0], verts[0].a[3][1], verts[0].a[3][2], verts[0].a[3][3], bfo[0], bfo[1], bfo[2], bfo[3], bfo[8], bfo[9], R(0x260), R(0x264), R(0xAA0), R(0xAA4), R(0xAC0), R(0xAC4), R(0x1E40), R(0x1E44), R(0x1E60)); } } } }
   { static const char* nt = getenv("XBOX_NOTEXLOG"); static int nn = 0;   // XBOX_NOTEXLOG=afterSeconds: log large untextured draws (fade / overlay quads) with their combiner constants
-    if (nt && nn < 60 && R(0x1E70) == 0) { static DWORD t0 = GetTickCount(); if ((int)(GetTickCount() - t0) > atoi(nt) * 1000) { float bx0, by0, bx1, by1, bp[4], bd0[4], bd1[4], bt0[4]; SoftScreenBBox(verts, n, &bx0, &by0, &bx1, &by1); SoftFirstVertexOut(verts, n, bp, bd0, bd1, bt0);
+    if (nt && nn < 60 && R(0x1E70) == 0) { static uint32_t t0 = (uint32_t)plat::TickMs(); if ((int)((uint32_t)plat::TickMs() - t0) > atoi(nt) * 1000) { float bx0, by0, bx1, by1, bp[4], bd0[4], bd1[4], bt0[4]; SoftScreenBBox(verts, n, &bx0, &by0, &bx1, &by1); SoftFirstVertexOut(verts, n, bp, bd0, bd1, bt0);
       if (bx1 - bx0 > 200 && by1 - by0 > 150) { ++nn; Log("[notex] draw #%d prim=%u n=%zu bbox=(%.0f,%.0f)-(%.0f,%.0f) blend=%u src=%x dst=%x depth=%u mask=%08x d0=(%.2f %.2f %.2f %.2f) c0=%08x c1=%08x final=%08x/%08x cc=%08x icwA0=%08x ocwA0=%08x icwC0=%08x ocwC0=%08x", g_frameDraws, prim, n, bx0, by0, bx1, by1, R(0x304), R(0x344), R(0x348), R(0x30C), R(0x358), bd0[0], bd0[1], bd0[2], bd0[3], R(0xA60), R(0xA80), R(0x288), R(0x28C), R(0x1E60), R(0x260), R(0xAA0), R(0xAC0), R(0x1E40)); } } } }
   { static const char* sk = getenv("XBOX_SKIPTEX0"); if (sk) { static std::vector<uint32_t> skipOffs; static bool init = false; if (!init) { init = true; for (const char* q = sk; *q;) { char* e; skipOffs.push_back((uint32_t)strtoul(q, &e, 0)); q = (*e == ',') ? e + 1 : e; if (e == q && *q) break; } } for (uint32_t o : skipOffs) if (R(0x1B00) == o) return; } }   // debug: skip every draw whose texture 0 sits at this offset
   { static int mx = getenv("XBOX_MAXDRAW") ? atoi(getenv("XBOX_MAXDRAW")) : 1 << 30, mn = getenv("XBOX_MINDRAW") ? atoi(getenv("XBOX_MINDRAW")) : 0; int idx = g_frameDraws++; if (idx >= mx || idx < mn) return; if (g_capSweep >= 0 && idx >= g_capSweep) return; }
@@ -449,7 +444,7 @@ static void GpuDrawImpl(uint32_t prim, const SoftVertex* verts, size_t n) {
     default: return;
   }
   if (idx.empty()) return;
-  uint32_t used = vs.used; int nUsed = __popcnt(used); uint32_t stride = nUsed ? nUsed * 16 : 16;
+  uint32_t used = vs.used; int nUsed = plat::PopCount32(used); uint32_t stride = nUsed ? nUsed * 16 : 16;
   uint8_t* vptr; size_t voff = RingAlloc((size_t)n * stride, 16, &vptr);
   for (size_t v = 0; v < n; v++) { float* d = (float*)(vptr + v * stride); if (!nUsed) { d[0] = d[1] = d[2] = d[3] = 0; continue; } int k = 0; for (int a = 0; a < 16; a++) if (used & (1u << a)) { memcpy(d + 4 * k, verts[v].a[a], 16); k++; } }
   uint8_t* iptr; size_t ioff = RingAlloc(idx.size() * 4, 4, &iptr); memcpy(iptr, idx.data(), idx.size() * 4);
@@ -525,15 +520,15 @@ void GpuFlip() {
 }
 static void GpuFlipImpl() {
   g_lastFrameDraws = g_frameDraws; g_frameDraws = 0; ++g_dbgFlips; g_ovSwitches = 0; g_ovSince = 0; g_ovLastRt = nullptr;
-  { static const char* sw = getenv("XBOX_CAPLIST"); static DWORD t0 = GetTickCount();   // XBOX_CAPLIST="16:100,20:300,...": from t seconds on, cap draws per frame at N (logged as [sweep])
-    if (sw) { DWORD el = (GetTickCount() - t0) / 1000; int cap = -1; const char* q = sw; while (*q) { int t = 0, c = 0, used = 0; if (sscanf(q, "%d:%d%n", &t, &c, &used) < 2) break; if ((int)el >= t) cap = c; q += used; if (*q == ',') ++q; }
+  { static const char* sw = getenv("XBOX_CAPLIST"); static uint32_t t0 = (uint32_t)plat::TickMs();   // XBOX_CAPLIST="16:100,20:300,...": from t seconds on, cap draws per frame at N (logged as [sweep])
+    if (sw) { uint32_t el = ((uint32_t)plat::TickMs() - t0) / 1000; int cap = -1; const char* q = sw; while (*q) { int t = 0, c = 0, used = 0; if (sscanf(q, "%d:%d%n", &t, &c, &used) < 2) break; if ((int)el >= t) cap = c; q += used; if (*q == ',') ++q; }
       if (cap != g_capSweep) { g_capSweep = cap; Log("[sweep] cap %d at %lus", cap, (unsigned long)el); } } }
-  { static const char* os = getenv("XBOX_OVERLAYSWEEP"); static DWORD t0 = GetTickCount(); static int base = -1;   // XBOX_OVERLAYSWEEP="Ustart,Uend,afterSeconds": in the final overlay phase (after >= 10 render-target switches) skip draws once Ucur draws have run since the last switch; Ucur rises one per flip
-    if (os) { int a = 0, b = 0, after = 0; sscanf(os, "%d,%d,%d", &a, &b, &after); if ((int)(GetTickCount() - t0) > after * 1000) { if (base < 0) base = g_dbgFlips; int u = a + (g_dbgFlips - base); g_ovCap = u <= b ? u : -1; } } }
-  { static const char* ts = getenv("XBOX_TAILSWEEP"); static DWORD t0 = GetTickCount(); static int base = -1;   // XBOX_TAILSWEEP="Kstart,Kend,afterSeconds": skip the last K draws of each frame (K from Kstart down to Kend, one per flip), relative to the previous frame's draw count
-    if (ts) { int a = 0, b = 0, after = 0; sscanf(ts, "%d,%d,%d", &a, &b, &after); if ((int)(GetTickCount() - t0) > after * 1000) { if (base < 0) base = g_dbgFlips; int k = a - (g_dbgFlips - base); if (k < b) { g_capSweep = -1; g_tailK = -1; } else { g_tailK = k; g_capSweep = g_lastFrameDraws - k; if (g_capSweep < 0) g_capSweep = 0; } } } }
-  { static const char* cs = getenv("XBOX_CAPSTEP"); static DWORD t0 = GetTickCount(); static int base = -1;   // XBOX_CAPSTEP="start,end,afterSeconds": per-frame draw cap goes start, start+1, ... one step per flip (use with XBOX_LUMLOG)
-    if (cs) { int a = 0, b = 0, after = 0; sscanf(cs, "%d,%d,%d", &a, &b, &after); if ((int)(GetTickCount() - t0) > after * 1000) { if (base < 0) base = g_dbgFlips; int c = a + (g_dbgFlips - base); g_capSweep = c <= b ? c : -1; } } }
+  { static const char* os = getenv("XBOX_OVERLAYSWEEP"); static uint32_t t0 = (uint32_t)plat::TickMs(); static int base = -1;   // XBOX_OVERLAYSWEEP="Ustart,Uend,afterSeconds": in the final overlay phase (after >= 10 render-target switches) skip draws once Ucur draws have run since the last switch; Ucur rises one per flip
+    if (os) { int a = 0, b = 0, after = 0; sscanf(os, "%d,%d,%d", &a, &b, &after); if ((int)((uint32_t)plat::TickMs() - t0) > after * 1000) { if (base < 0) base = g_dbgFlips; int u = a + (g_dbgFlips - base); g_ovCap = u <= b ? u : -1; } } }
+  { static const char* ts = getenv("XBOX_TAILSWEEP"); static uint32_t t0 = (uint32_t)plat::TickMs(); static int base = -1;   // XBOX_TAILSWEEP="Kstart,Kend,afterSeconds": skip the last K draws of each frame (K from Kstart down to Kend, one per flip), relative to the previous frame's draw count
+    if (ts) { int a = 0, b = 0, after = 0; sscanf(ts, "%d,%d,%d", &a, &b, &after); if ((int)((uint32_t)plat::TickMs() - t0) > after * 1000) { if (base < 0) base = g_dbgFlips; int k = a - (g_dbgFlips - base); if (k < b) { g_capSweep = -1; g_tailK = -1; } else { g_tailK = k; g_capSweep = g_lastFrameDraws - k; if (g_capSweep < 0) g_capSweep = 0; } } } }
+  { static const char* cs = getenv("XBOX_CAPSTEP"); static uint32_t t0 = (uint32_t)plat::TickMs(); static int base = -1;   // XBOX_CAPSTEP="start,end,afterSeconds": per-frame draw cap goes start, start+1, ... one step per flip (use with XBOX_LUMLOG)
+    if (cs) { int a = 0, b = 0, after = 0; sscanf(cs, "%d,%d,%d", &a, &b, &after); if ((int)((uint32_t)plat::TickMs() - t0) > after * 1000) { if (base < 0) base = g_dbgFlips; int c = a + (g_dbgFlips - base); g_capSweep = c <= b ? c : -1; } } }
   if (!g_ok) return;
   Frame& fr = F(); if (!fr.recording) { BeginFrame(); }
   if (!g_rt || !EnsureSwapchain()) { EndRendering(); vkEndCommandBuffer(fr.cb); fr.recording = false; VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO}; si.commandBufferCount = 1; si.pCommandBuffers = &fr.cb; vkResetFences(g_dev, 1, &fr.fence); vkQueueSubmit(g_queue, 1, &si, fr.fence); g_fi ^= 1; ++g_frameNo; return; }

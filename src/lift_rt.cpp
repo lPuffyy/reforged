@@ -2,8 +2,19 @@
 // Enabled with XBOX_LIFT=1 (hybrid mode on the Windows host: guest memory is real memory, unlifted functions still run natively).
 #include "lift_rt.h"
 #include "kernel.h"
+#include "plat.h"
+#ifndef LIFT_NO_NATIVE   // native-fallback and self-test code needs the Windows exception/thread-context API
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
-#include <intrin.h>
+#endif
+#if !defined(_MSC_VER) && (defined(__x86_64__) || defined(__i386__))
+#include <x86intrin.h>
+#endif
 #include <cstdio>
 #include <cstdlib>
 #include <unordered_map>
@@ -26,7 +37,7 @@ static bool g_on = false, g_trace = false, g_stats = false;
 static std::vector<std::pair<uint32_t, uint32_t>> g_codeRegions;   // executable XBE sections: write-protected during the self-test
 static std::vector<std::pair<uint32_t, uint32_t>> g_dataRegions;   // writable XBE sections (for the self-test's snapshot/restore)
 static std::unordered_map<uint32_t, int> g_skip;   // XBOX_LIFT_SKIP=hex,hex: functions kept native (known-bad lifts)
-static volatile long g_nLifted = 0, g_nKernel = 0, g_nNative = 0;
+static volatile int32_t g_nLifted = 0, g_nKernel = 0, g_nNative = 0;
 static std::unordered_map<uint32_t, long> g_nativeCount; static std::mutex g_nativeMx;
 
 extern "C" volatile long long g_liftIcount = 0;
@@ -90,38 +101,42 @@ void LiftInit(const char* xbePath) {
     if (same) g_lifted[e.addr] = e.fn; else { patched++; if (patched <= 80 && getenv("XBOX_LIFT_STATS")) Log("[lift] disabled (differs from the file or filtered): f_%08x", e.addr); }
   }
   for (int i = 0; i < g_kernelImportCount; i++) if (g_kernelImports[i].fn) g_kfn[KernelImportAddr(&g_kernelImports[i])] = &g_kernelImports[i];
-  if (getenv("XBOX_LIFT_WATCH")) CreateThread(nullptr, 0, [](void*) -> DWORD { int secs = atoi(getenv("XBOX_LIFT_WATCH")); for (;;) { Sleep(secs * 1000); Log("[watch] ---- thread trails ----"); DumpAllRings(); } }, nullptr, 0, nullptr);
+  if (getenv("XBOX_LIFT_WATCH")) plat::ThreadSpawn([](void*) -> uint32_t { int secs = atoi(getenv("XBOX_LIFT_WATCH")); for (;;) { plat::SleepMs(secs * 1000); Log("[watch] ---- thread trails ----"); DumpAllRings(); } });
   g_on = true; g_trace = getenv("XBOX_LIFT_TRACE") != nullptr; g_stats = getenv("XBOX_LIFT_STATS") != nullptr;
-  if (g_stats) CreateThread(nullptr, 0, [](void*) -> DWORD { long lastL = 0, lastK = 0, lastN = 0; for (;;) { Sleep(10000); long l = g_nLifted, k = g_nKernel, n = g_nNative; { static long long li = 0; long long ic = g_liftIcount; Log("[lift] guest instructions: %.1f M per second", (ic - li) / 10e6); li = ic; }
-      Log("[lift] stats (10 s): %ld lifted calls, %ld kernel calls, %ld native calls", l - lastL, k - lastK, n - lastN); lastL = l; lastK = k; lastN = n; std::vector<std::pair<long, uint32_t>> top; { std::lock_guard<std::mutex> lk(g_nativeMx); for (auto& e : g_nativeCount) top.push_back({e.second, e.first}); } std::sort(top.begin(), top.end(), [](auto& a, auto& b) { return a.first > b.first; }); char b[600] = ""; for (size_t i = 0; i < top.size() && i < 12; i++) { char t[32]; snprintf(t, sizeof t, " %x:%ld", top[i].second, top[i].first); strcat(b, t); } Log("[lift] hottest native targets:%s", b); if (FILE* nf = fopen("work/lift/native_targets.txt", "w")) { std::lock_guard<std::mutex> lk(g_nativeMx); for (auto& e : g_nativeCount) fprintf(nf, "%08x\n", e.first); fclose(nf); } } }, nullptr, 0, nullptr);
-  if (getenv("XBOX_LIFT_SELFTEST")) { HANDLE th = CreateThread(nullptr, 8 << 20, [](void*) -> DWORD { LiftSelfTest(); return 0; }, nullptr, 0, nullptr); WaitForSingleObject(th, INFINITE); }   // own thread: a big committed stack for the trial frames
+  if (g_stats) plat::ThreadSpawn([](void*) -> uint32_t { long lastL = 0, lastK = 0, lastN = 0; for (;;) { plat::SleepMs(10000); long l = g_nLifted, k = g_nKernel, n = g_nNative; { static long long li = 0; long long ic = g_liftIcount; Log("[lift] guest instructions: %.1f M per second", (ic - li) / 10e6); li = ic; }
+      Log("[lift] stats (10 s): %ld lifted calls, %ld kernel calls, %ld native calls", l - lastL, k - lastK, n - lastN); lastL = l; lastK = k; lastN = n; std::vector<std::pair<long, uint32_t>> top; { std::lock_guard<std::mutex> lk(g_nativeMx); for (auto& e : g_nativeCount) top.push_back({e.second, e.first}); } std::sort(top.begin(), top.end(), [](auto& a, auto& b) { return a.first > b.first; }); char b[600] = ""; for (size_t i = 0; i < top.size() && i < 12; i++) { char t[32]; snprintf(t, sizeof t, " %x:%ld", top[i].second, top[i].first); strcat(b, t); } Log("[lift] hottest native targets:%s", b); if (FILE* nf = fopen("work/lift/native_targets.txt", "w")) { std::lock_guard<std::mutex> lk(g_nativeMx); for (auto& e : g_nativeCount) fprintf(nf, "%08x\n", e.first); fclose(nf); } } });
+  if (getenv("XBOX_LIFT_SELFTEST")) { plat::Obj* th = plat::ThreadStart([](void*) -> uint32_t { LiftSelfTest(); return 0; }, nullptr, 8 << 20, false, nullptr); plat::Wait(th, plat::kInfinite); }   // own thread: a big committed stack for the trial frames
   Log("[lift] %u lifted functions available (%d disabled: patched in memory)", (unsigned)g_lifted.size(), patched);
 }
 
 extern "C" void LiftUnsupported(uint32_t addr, const char* what) { Log("[lift] unsupported at 0x%x: %s", addr, what); }
 extern "C" void LiftHere(uint32_t addr) { Log("[lift] at 0x%x", addr); }
+#if defined(_MSC_VER) || defined(__x86_64__) || defined(__i386__)
 extern "C" uint64_t LiftRdtsc() { return __rdtsc(); }
-extern "C" uint32_t LiftXadd32(uint32_t a, uint32_t v) { return (uint32_t)_InterlockedExchangeAdd((volatile long*)G(a), (long)v); }
-extern "C" uint32_t LiftCmpxchg32(uint32_t a, uint32_t* expected, uint32_t v) { return (uint32_t)_InterlockedCompareExchange((volatile long*)G(a), (long)v, (long)*expected); }
-extern "C" void LiftXchg32(uint32_t a, uint32_t* v) { *v = (uint32_t)_InterlockedExchange((volatile long*)G(a), (long)*v); }
+#else
+extern "C" uint64_t LiftRdtsc() { return plat::PerfCounter() * 733 / 1000; }   // guest cycles at the original CPU's 733 MHz
+#endif
+extern "C" uint32_t LiftXadd32(uint32_t a, uint32_t v) { return (uint32_t)plat::AtomicAdd((volatile int32_t*)G(a), (int32_t)v); }
+extern "C" uint32_t LiftCmpxchg32(uint32_t a, uint32_t* expected, uint32_t v) { return (uint32_t)plat::AtomicCas((volatile int32_t*)G(a), (int32_t)*expected, (int32_t)v); }
+extern "C" void LiftXchg32(uint32_t a, uint32_t* v) { *v = (uint32_t)plat::AtomicExchange((volatile int32_t*)G(a), (int32_t)*v); }
 extern "C" uint32_t LiftLock32(int op, uint32_t a, uint32_t v) {   // returns the old value
-  volatile long* p = (volatile long*)G(a);
-  switch (op) { case 0: return (uint32_t)_InterlockedExchangeAdd(p, (long)v); case 1: return (uint32_t)_InterlockedExchangeAdd(p, -(long)v);
-                case 2: return (uint32_t)_InterlockedAnd(p, (long)v); case 3: return (uint32_t)_InterlockedOr(p, (long)v); default: return (uint32_t)_InterlockedXor(p, (long)v); }
+  volatile int32_t* p = (volatile int32_t*)G(a);
+  switch (op) { case 0: return (uint32_t)plat::AtomicAdd(p, (int32_t)v); case 1: return (uint32_t)plat::AtomicAdd(p, -(int32_t)v);
+                case 2: return (uint32_t)plat::AtomicAnd(p, (int32_t)v); case 3: return (uint32_t)plat::AtomicOr(p, (int32_t)v); default: return (uint32_t)plat::AtomicXor(p, (int32_t)v); }
 }
 
 // Kernel imports are host functions with stdcall/fastcall conventions: pull the arguments off the guest stack and call them.
 // Host functions take real pointers for pointer arguments; guest code passes 32-bit guest addresses. The bridge converts the arguments named by KernelImport::ptrMask,
 // and passes everything as uintptr_t (on x86 that is the same width as before; on x64 the callee reads the low 32 bits of integer arguments).
 typedef uintptr_t UA;
-typedef uint32_t(__stdcall* S0)(); typedef uint32_t(__stdcall* S1)(UA); typedef uint32_t(__stdcall* S2)(UA, UA); typedef uint32_t(__stdcall* S3)(UA, UA, UA);
-typedef uint32_t(__stdcall* S4)(UA, UA, UA, UA); typedef uint32_t(__stdcall* S5)(UA, UA, UA, UA, UA);
-typedef uint32_t(__stdcall* S6)(UA, UA, UA, UA, UA, UA); typedef uint32_t(__stdcall* S7)(UA, UA, UA, UA, UA, UA, UA);
-typedef uint32_t(__stdcall* S8)(UA, UA, UA, UA, UA, UA, UA, UA);
-typedef uint32_t(__stdcall* S9)(UA, UA, UA, UA, UA, UA, UA, UA, UA);
-typedef uint32_t(__stdcall* S10)(UA, UA, UA, UA, UA, UA, UA, UA, UA, UA);
-typedef uint32_t(__fastcall* F1)(UA); typedef uint32_t(__fastcall* F2)(UA, UA); typedef uint32_t(__fastcall* F3)(UA, UA, UA);
-typedef uint64_t(__stdcall* Q0)();
+typedef uint32_t(PLAT_STDCALL* S0)(); typedef uint32_t(PLAT_STDCALL* S1)(UA); typedef uint32_t(PLAT_STDCALL* S2)(UA, UA); typedef uint32_t(PLAT_STDCALL* S3)(UA, UA, UA);
+typedef uint32_t(PLAT_STDCALL* S4)(UA, UA, UA, UA); typedef uint32_t(PLAT_STDCALL* S5)(UA, UA, UA, UA, UA);
+typedef uint32_t(PLAT_STDCALL* S6)(UA, UA, UA, UA, UA, UA); typedef uint32_t(PLAT_STDCALL* S7)(UA, UA, UA, UA, UA, UA, UA);
+typedef uint32_t(PLAT_STDCALL* S8)(UA, UA, UA, UA, UA, UA, UA, UA);
+typedef uint32_t(PLAT_STDCALL* S9)(UA, UA, UA, UA, UA, UA, UA, UA, UA);
+typedef uint32_t(PLAT_STDCALL* S10)(UA, UA, UA, UA, UA, UA, UA, UA, UA, UA);
+typedef uint32_t(PLAT_FASTCALL* F1)(UA); typedef uint32_t(PLAT_FASTCALL* F2)(UA, UA); typedef uint32_t(PLAT_FASTCALL* F3)(UA, UA, UA);
+typedef uint64_t(PLAT_STDCALL* Q0)();
 static void KBridge(LiftCpu* c, const KernelImport* k) {
   if (!k->fn) { c->eax = 0; c->esp += 4 + 4 * k->argc; return; }
   const uint32_t* ga = (const uint32_t*)G(c->esp + 4); uint32_t r = 0; uint64_t r64 = 0; bool wide = false; int pops = 0;
@@ -148,16 +163,16 @@ static void KBridge(LiftCpu* c, const KernelImport* k) {
 }
 
 // per-thread trail of the last lifted functions entered (crash diagnostics) and the native call in progress
-struct Ring { uint32_t r[64]; unsigned pos; DWORD tid; };
+struct Ring { uint32_t r[64]; unsigned pos; uint32_t tid; };
 static std::mutex g_ringMx; static std::vector<Ring*> g_rings;
-static Ring* ThreadRing() { static thread_local Ring* t = nullptr; if (!t) { t = new Ring{}; t->tid = GetCurrentThreadId(); std::lock_guard<std::mutex> l(g_ringMx); g_rings.push_back(t); } return t; }
+static Ring* ThreadRing() { static thread_local Ring* t = nullptr; if (!t) { t = new Ring{}; t->tid = plat::ThreadId(); std::lock_guard<std::mutex> l(g_ringMx); g_rings.push_back(t); } return t; }
 #define t_ring (ThreadRing()->r)
 #define t_ringPos (ThreadRing()->pos)
 static thread_local uint32_t t_inNative = 0;
 #ifndef LIFT_NO_NATIVE
 // Run unlifted original code: switch to the guest stack, load the registers, call, store them back. The target travels in fs:[0x1C] (TEB.EnvironmentPointer, unused)
 // because every general register carries guest state at the call. pcr+0x800/0x804 hold the host esp and LiftCpu pointer (old values saved on the host stack for nesting).
-__declspec(naked) static void __cdecl NativeCallAsm(uint32_t* regs, uint32_t target) {
+__declspec(naked) static void PLAT_CDECL NativeCallAsm(uint32_t* regs, uint32_t target) {
   __asm {
     push ebx
     push esi
@@ -243,11 +258,11 @@ extern "C" void LiftDispatch(LiftCpu* c, uint32_t target) {
   t_ring[t_ringPos++ & 63] = target;
   { static const uint32_t logFn = getenv("XBOX_LIFT_LOGFN") ? (uint32_t)strtoul(getenv("XBOX_LIFT_LOGFN"), nullptr, 16) : 0; static std::atomic<int> n{0}; if (logFn && target == logFn && n++ < (getenv("XBOX_LIFT_LOGFN_N") ? atoi(getenv("XBOX_LIFT_LOGFN_N")) : 40)) { const uint32_t* a = (const uint32_t*)G(c->esp); Log("[logfn] 0x%x called from 0x%x args: %x %x %x %x %x %x  [edi=%x ebp=%x ebp+10=%x]", target, a[0], a[1], a[2], a[3], a[4], a[5], a[6], c->edi, c->ebp, *(const uint32_t*)G(c->ebp + 0x10)); } }
   auto it = g_lifted.find(target);
-  if (it != g_lifted.end()) { if (g_trace) LiftHere(target); if (g_stats) InterlockedIncrement(&g_nLifted); it->second(c); return; }
+  if (it != g_lifted.end()) { if (g_trace) LiftHere(target); if (g_stats) plat::AtomicAdd(&g_nLifted, 1); it->second(c); return; }
   if (!g_over.empty()) { auto o = g_over.find(target); if (o != g_over.end()) { KBridge(c, o->second); return; } }
   auto k = g_kfn.find((uintptr_t)target);
-  if (k != g_kfn.end()) { if (g_stats) InterlockedIncrement(&g_nKernel); KBridge(c, k->second); return; }
-  if (g_stats) InterlockedIncrement(&g_nNative);
+  if (k != g_kfn.end()) { if (g_stats) plat::AtomicAdd(&g_nKernel, 1); KBridge(c, k->second); return; }
+  if (g_stats) plat::AtomicAdd(&g_nNative, 1);
   if (target >= 0x10000 && target < 0x600000) { std::lock_guard<std::mutex> lk(g_nativeMx); static int n = 0; if (++g_nativeCount[target] == 1) { if (n++ < 400) Log("[lift] native fallback for 0x%x", target); if (g_stats) { if (FILE* nf = fopen("work/lift/native_targets.txt", "a")) { fprintf(nf, "%08x\n", target); fclose(nf); } } } }
   NativeCall(c, target);
 }
@@ -260,7 +275,7 @@ uint32_t GuestCall(uint32_t fn, int n, uint32_t a0, uint32_t a1, uint32_t a2, ui
   if (!g_on || !g_lifted.count(fn)) {
 #endif   // not lifted: the original code runs natively, exactly as without XBOX_LIFT
     if (g_on) { static std::mutex mx; std::lock_guard<std::mutex> lk(mx); static std::unordered_map<uint32_t, int> seen; if (!seen[fn]++) Log("[lift] GuestCall runs 0x%x natively (not lifted)", fn); }
-    typedef uint32_t(__stdcall * F)(uint32_t, uint32_t, uint32_t, uint32_t);
+    typedef uint32_t(PLAT_STDCALL * F)(uint32_t, uint32_t, uint32_t, uint32_t);
     switch (n) { case 0: return ((S0)(uintptr_t)fn)(); case 1: return ((S1)(uintptr_t)fn)(a0); case 2: return ((S2)(uintptr_t)fn)(a0, a1); case 3: return ((S3)(uintptr_t)fn)(a0, a1, a2); default: return ((S4)(uintptr_t)fn)(a0, a1, a2, a3); }
   }
   // Lifted C frames live on the host stack, so the guest stack must be separate memory (1 MB per thread, allocated on first use). Nested calls (a kernel callback
@@ -295,7 +310,7 @@ struct Snap { uint32_t r[8]; uint8_t mem[4096]; uint8_t stk[2048]; bool faulted;
 static int StFilt(EXCEPTION_POINTERS* ep, Snap* o) { o->code = ep->ExceptionRecord->ExceptionCode; o->at = (uint32_t)(uintptr_t)ep->ExceptionRecord->ExceptionAddress; o->addr = ep->ExceptionRecord->NumberParameters > 1 ? (uint32_t)ep->ExceptionRecord->ExceptionInformation[1] : 0; return EXCEPTION_EXECUTE_HANDLER; }
 static uint8_t* g_scratch = nullptr;   // one committed page between no-access guard regions: runaway stores fault instead of trashing the process 
 static volatile LONG g_stRun = 0; static volatile DWORD g_stTid = 0;
-static void __stdcall StBail() { RaiseException(0xE0DEAD01, 0, 0, nullptr); }
+static void PLAT_STDCALL StBail() { RaiseException(0xE0DEAD01, 0, 0, nullptr); }
 static DWORD WINAPI StWatchdog(void*) {   // a random input can send a function into a very long loop: after ~300 ms redirect the thread into an exception that the trial's __try catches
   LONG last = -1; int stuck = 0;
   for (;;) {
@@ -316,7 +331,7 @@ static void RunOne(const LiftEntry& e, bool native, const uint32_t* init, const 
   memcpy(g_scratch, mem0, 4096);
   LiftCpu c; memset(&c, 0, sizeof c); memcpy(&c.eax, init, 32);
   out->faulted = false; out->code = 0; memset(out->stk, 0, sizeof out->stk);
-  t_quiet = true; InterlockedIncrement(&g_stRun); g_stTid = GetCurrentThreadId();
+  t_quiet = true; InterlockedIncrement(&g_stRun); g_stTid = plat::ThreadId();
   out->base = 0; __try { RunInner(e, native, init, stk0, &c, out->stk, &out->base); } __except (StFilt(GetExceptionInformation(), out)) { out->faulted = true; }
   g_stTid = 0; t_quiet = false;
   if (getenv("XBOX_LIFT_SELFTEST_V")) { Log("[selftest]   after %s: fault=%d code=%08x TEB base=%08x limit=%08x", native ? "native" : "lifted", (int)out->faulted, out->code, __readfsdword(4), __readfsdword(8)); fflush(nullptr); }

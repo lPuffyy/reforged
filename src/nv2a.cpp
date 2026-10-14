@@ -3,7 +3,7 @@
 // Written from the hardware documentation (xemu's hw/xbox/nv2a and envytools were read as reference).
 #include "kernel.h"
 #include "guestmem.h"
-#include <windows.h>
+#include "plat.h"
 #include <cstdio>
 #include <cstring>
 #include <map>
@@ -19,8 +19,8 @@ void PgraphFlip();
 static inline uint8_t* Pramin() { return G(0xFD000000u + 0x700000); }
 
 namespace {
-HANDLE g_kick;
-HANDLE g_vblankEvent = CreateEventA(nullptr, TRUE, FALSE, nullptr);  // pulsed by the vblank thread; FLIP_STALL waits for it
+plat::Obj* g_kick;
+plat::Obj* g_vblankEvent = plat::EventNew(true, false);  // pulsed by the vblank thread; FLIP_STALL waits for it
 uint32_t g_subchClass[8];            // object class bound to each subchannel (0x97 = 3D, 0x62 surface, ...)
 uint32_t g_subchInstance[8];         // RAMIN address of that object
 uint32_t g_dmaSemaphore;             // RAMIN address of the semaphore DMA object
@@ -59,7 +59,7 @@ void PgraphMethod(int subch, uint32_t method, uint32_t param) {
   ++g_methodCount[subch];
   if (g_subchClass[subch] == 0x97) {
     switch (method) {
-      case 0x130: PgraphFlip(); ResetEvent(g_vblankEvent); WaitForSingleObject(g_vblankEvent, 40); return;   // FLIP_STALL: the swap completes at the next vblank
+      case 0x130: PgraphFlip(); plat::EventReset(g_vblankEvent); plat::Wait(g_vblankEvent, 40); return;   // FLIP_STALL: the swap completes at the next vblank
       case 0x12C: return;                                                                      // FLIP_INCREMENT_WRITE
       case 0x100:                                                            // NO_OPERATION; a nonzero parameter is a software method: raise a PGRAPH error/notify interrupt and stall until the ISR acknowledges it
         if (param) {
@@ -67,7 +67,7 @@ void PgraphMethod(int subch, uint32_t method, uint32_t param) {
           MmioSet(0x400704, (subch << 16) | method); MmioSet(0x400708, param); MmioSet(0x400108, 1);
           MmioSet(0x400100, MmioGet(0x400100) | (1u << 20));
           if (MmioGet(0x000140) != 0 && (MmioGet(0x400100) & MmioGet(0x400140))) KernelDeliverInterrupt(0x33);   // run the GPU ISR now instead of waiting for the next vblank tick
-          int i = 0; for (; i < 2000 && (MmioGet(0x400100) & (1u << 20)); i++) Sleep(1);
+          int i = 0; for (; i < 2000 && (MmioGet(0x400100) & (1u << 20)); i++) plat::SleepMs(1);
           static long swCount = 0; ++swCount; if (i >= 2000) Log("[pgraph] software method #%ld (param 0x%x): ISR never acknowledged", swCount, param); else if (swCount % 200 == 0) Log("[pgraph] %ld software methods handled", swCount);
         }
         return;
@@ -148,7 +148,7 @@ void RunPusher() {
     else {
       Log("[pfifo] reserved pushbuffer command 0x%08x at 0x%x (put=0x%x)", word, get - 4, put);
       { static int pd = 0; if (pd++ == 0) { MmioDumpPutHistory(); MmioDumpReadHistory(); } }
-      { static int rr = 0; if (rr++ < 3) { uint32_t w0 = *(uint32_t*)(dma + get - 4); Sleep(100); Log("[pfifo]   re-read after 100 ms: before=0x%08x after=0x%08x now put=0x%x", w0, *(uint32_t*)(dma + get - 4), MmioGet(PFIFO_DMA_PUT)); } }
+      { static int rr = 0; if (rr++ < 3) { uint32_t w0 = *(uint32_t*)(dma + get - 4); plat::SleepMs(100); Log("[pfifo]   re-read after 100 ms: before=0x%08x after=0x%08x now put=0x%x", w0, *(uint32_t*)(dma + get - 4), MmioGet(PFIFO_DMA_PUT)); } }
       static int dumped = 0; if (dumped++ == 0) { for (int i = 0; i < 32; i++) Log("[pfifo]   run history: get=0x%x put=0x%x", runs[(runPos + i) & 31][0], runs[(runPos + i) & 31][1]); for (int i = 0; i < 16; i++) Log("[pfifo]   header history: get=0x%x word=0x%08x", hist[(histPos + i) & 15][0], hist[(histPos + i) & 15][1]); for (uint32_t a = get - 4 - 64; a < get - 4 + 16; a += 4) Log("[pfifo]   0x%x: %08x", a, *(uint32_t*)(dma + a)); }
       break;
     }
@@ -158,15 +158,15 @@ void RunPusher() {
   MmioSet(PFIFO_DMA_GET, get);
 }
 
-DWORD WINAPI PusherThread(void*) {
+uint32_t PusherThread(void*) {
   XThreadInit(0);   // the pusher runs the GPU ISR (guest code) for software methods: it needs a KPCR like any guest thread
-  for (;;) { WaitForSingleObject(g_kick, 2); if (MmioGet(PFIFO_DMA_GET) != MmioGet(PFIFO_DMA_PUT)) RunPusher(); }
+  for (;;) { plat::Wait(g_kick, 2); if (MmioGet(PFIFO_DMA_GET) != MmioGet(PFIFO_DMA_PUT)) RunPusher(); }
 }
 }  // namespace
 
 uint8_t* Nv2aDmaMap(uint32_t instance, uint32_t* limit) { return DmaMap(instance, limit); }
-void Nv2aKick() { SetEvent(g_kick); }
-void Nv2aVblank() { PulseEvent(g_vblankEvent); }
-void Nv2aInit() { g_kick = CreateEventA(nullptr, FALSE, FALSE, nullptr); CreateThread(nullptr, 0, PusherThread, nullptr, 0, nullptr); }
+void Nv2aKick() { plat::EventSet(g_kick); }
+void Nv2aVblank() { plat::EventPulse(g_vblankEvent); }
+void Nv2aInit() { g_kick = plat::EventNew(false, false); plat::ThreadSpawn(PusherThread); }
 static void DumpWords(uint32_t phys, int n) { char b[600] = ""; for (int i = 0; i < n; i++) { char t[16]; sprintf(t, " %08x", *(uint32_t*)(KernelRamBase() + phys + i * 4)); strcat(b, t); } Log("[ram] 0x%07x:%s", phys, b); }
 void Nv2aDump() { Log("[pfifo] final get=0x%x put=0x%x pgraph intr=0x%x", MmioGet(PFIFO_DMA_GET), MmioGet(PFIFO_DMA_PUT), MmioGet(0x400100)); PgraphDump(); DumpWords(0, 8); DumpWords(0x101000, 12); DumpWords(0x35ed000 - 0x40, 16); DumpWords(0x35ed000, 16); for (int i = 0; i < 8; i++) if (g_methodCount[i]) Log("[pgraph] subchannel %d class 0x%x: %llu methods", i, g_subchClass[i], (unsigned long long)g_methodCount[i]); }

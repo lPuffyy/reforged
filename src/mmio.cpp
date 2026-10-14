@@ -4,7 +4,16 @@
 //  - write: after the instruction the changed bytes are forwarded to the register model.
 #include "kernel.h"
 #include "guestmem.h"
+#include "plat.h"
+#ifndef LIFT_NO_NATIVE   // the page-fault trap (native 32-bit builds only) needs the Windows exception API
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
+#endif
 #include <cstdio>
 #include <cstring>
 #include <map>
@@ -56,7 +65,7 @@ static uint32_t PmcIntr0() {
 static void WaitPusherIdle() {
   if (MmioGet(0x3244) == MmioGet(0x3240)) return;
   g_mmioMutex.unlock();
-  ULONGLONG t0 = GetTickCount64(); while (MmioGet(0x3244) != MmioGet(0x3240) && GetTickCount64() - t0 < 500) Sleep(0);
+  uint64_t t0 = plat::TickMs(); while (MmioGet(0x3244) != MmioGet(0x3240) && plat::TickMs() - t0 < 500) plat::SleepMs(0);
   g_mmioMutex.lock();
 }
 static bool LockStep() { static bool v = getenv("XBOX_SYNC_GPU") != nullptr && !getenv("XBOX_ASYNC_GPU"); return v; }
@@ -69,7 +78,7 @@ static uint32_t RegRead(uint32_t reg) {
     case 0x600100: v = g_pcrtcPending; break;
     case 0x002400: v = 0x10; break;                             // PFIFO RUNOUT_STATUS: empty
     case 0x003214: case 0x003014: v = 0x10; break;              // PFIFO CACHE1/0 STATUS: LOW_MARK (cache empty)                   // NV_PCRTC_INTR_0
-    case 0x009400: case 0x009410: v = (uint32_t)(GetTickCount64() * 1000); break;  // PTIMER_TIME_0 (ns-ish counter)
+    case 0x009400: case 0x009410: v = (uint32_t)(plat::TickMs() * 1000); break;  // PTIMER_TIME_0 (ns-ish counter)
     default: {
       uint32_t r = reg;
       if (reg >= 0x800000 && (reg & 0xFFFF) >= 0x40 && (reg & 0xFFFF) <= 0x48) r = 0x3240 + ((reg & 0xFFFF) - 0x40);  // USER DMA_PUT/GET/REF -> PFIFO CACHE1
@@ -95,7 +104,7 @@ static void RegWrite(uint32_t reg, uint32_t v) {
     MmioSet(0x3240 + ((reg & 0xFFFF) - 0x40), v); Nv2aKick();  // USER DMA_PUT/GET/REF
     if ((reg & 0xFFFF) == 0x40 && LockStep()) {   // lock-step CPU and GPU: the guest does not run ahead of the pusher (debugging aid for ring overruns)
       g_mmioMutex.unlock();
-      ULONGLONG t0 = GetTickCount64(); while (MmioGet(0x3244) != MmioGet(0x3240) && GetTickCount64() - t0 < 500) Sleep(0);
+      uint64_t t0 = plat::TickMs(); while (MmioGet(0x3244) != MmioGet(0x3240) && plat::TickMs() - t0 < 500) plat::SleepMs(0);
       g_mmioMutex.lock();
     } }
   else if (reg == 0x100410) MmioSet(reg, 0);                  // self-clearing command bit (PFB)
@@ -104,10 +113,10 @@ static void RegWrite(uint32_t reg, uint32_t v) {
 }
 
 // Vblank at 60 Hz: set PCRTC pending and run the GPU ISR when the title enabled interrupts.
-static DWORD WINAPI VblankThread(void*) {
+static uint32_t VblankThread(void*) {
   XThreadInit(0);
   for (;;) {
-    Sleep(16);
+    plat::SleepMs(16);
     { static uint32_t last = 0; static int tick = 0; if (++tick % 60 == 0 && getenv("XBOX_KICKLOG")) { Log("[perf] PUT writes/s: %u", g_putPos - last); last = g_putPos; } }
     std::lock_guard<std::mutex> l(g_mmioMutex);  // register model is not thread safe: share the fault lock
     Nv2aVblank();
@@ -175,9 +184,7 @@ static LONG WINAPI MmioHandler(EXCEPTION_POINTERS* ep) {
   }
   return EXCEPTION_CONTINUE_SEARCH;
 }
-#else
-static LONG WINAPI MmioHandler(EXCEPTION_POINTERS*) { return EXCEPTION_CONTINUE_SEARCH; }   // hardware windows are reached through MmioRead/MmioWrite
-#endif
+#endif   // portable builds reach the hardware windows through MmioRead/MmioWrite only
 
 // Explicit register access for lifted code (no page-fault trap): the same device models as the fault handler, entered with the same lock held.
 // Addresses >= 0xFD000000 are hardware; the PRAMIN window (0xFD700000..) aliases the top 1 MB of RAM and is handled by the caller's memory map.
@@ -208,11 +215,11 @@ void MmioInit() {
 #ifdef GUEST_IDENTITY
   bool ok = VirtualAlloc((void*)(uintptr_t)kBase, 0x700000, MEM_RESERVE | MEM_COMMIT, PAGE_NOACCESS) &&
             VirtualAlloc((void*)(uintptr_t)(kBase + 0x800000), 0x800000, MEM_RESERVE | MEM_COMMIT, PAGE_NOACCESS);
-  if (!ok) { Log("[nv2a] cannot map the register window at 0x%08x (error %lu)", kBase, GetLastError()); return; }
+  if (!ok) { Log("[nv2a] cannot map the register window at 0x%08x", kBase); return; }
 #endif
-  if (!MapViewOfFileEx(g_ramMap, FILE_MAP_ALL_ACCESS, 0, 0x03F00000, 0x100000, G(kBase + 0x700000))) Log("[nv2a] PRAMIN alias failed (error %lu)", GetLastError());
+  if (!plat::ShmMap(g_ramMap, 0x03F00000, 0x100000, G(kBase + 0x700000))) Log("[nv2a] PRAMIN alias failed");
   // BAR1 (0xF0000000): the GPU's framebuffer aperture is the same physical RAM (UMA), so alias all of it there.
-  if (!MapViewOfFileEx(g_ramMap, FILE_MAP_ALL_ACCESS, 0, 0, 0x4000000, G(0xF0000000u))) Log("[nv2a] framebuffer aperture alias failed (error %lu)", GetLastError());
+  if (!plat::ShmMap(g_ramMap, 0, 0x4000000, G(0xF0000000u))) Log("[nv2a] framebuffer aperture alias failed");
 #ifdef GUEST_IDENTITY
   VirtualAlloc((void*)(uintptr_t)kUsbBase, kUsbSize, MEM_RESERVE | MEM_COMMIT, PAGE_NOACCESS);
 #endif
@@ -225,8 +232,10 @@ void MmioInit() {
 #ifdef GUEST_IDENTITY
   VirtualAlloc((void*)(uintptr_t)kNicBase, kNicSize, MEM_RESERVE | MEM_COMMIT, PAGE_NOACCESS);
 #endif
+#ifndef LIFT_NO_NATIVE
   AddVectoredExceptionHandler(1, MmioHandler);
+#endif
   Nv2aInit();
-  CreateThread(nullptr, 0, VblankThread, nullptr, 0, nullptr);
+  plat::ThreadSpawn(VblankThread);
   Log("[nv2a] register window mapped at 0x%08x", kBase);
 }

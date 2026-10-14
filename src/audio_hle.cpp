@@ -4,11 +4,9 @@
 // is not emulated: volume and pitch are honoured, positioning and mix bins are ignored (mono sources are centred).
 #include "kernel.h"
 #include "guestmem.h"
-#include <windows.h>
-#include <mmsystem.h>
+#include "plat.h"
 #include <cmath>
 #include <cstdio>
-#include <intrin.h>
 #include <map>
 #include <cstdlib>
 #include <cstring>
@@ -71,14 +69,14 @@ bool Frame(Voice* v, const uint8_t* data, uint32_t bytes, int64_t f, float* l, f
 }
 uint32_t TotalFrames(Voice* v, uint32_t bytes) { return v->tag == 0x69 ? (bytes / v->blockAlign) * 64 : bytes / (v->channels * (v->bits / 8)); }
 
-extern "C" uint32_t __stdcall K_KeSetEvent(uint32_t ev, uint32_t inc, uint32_t wait);
+extern "C" uint32_t PLAT_STDCALL K_KeSetEvent(uint32_t ev, uint32_t inc, uint32_t wait);
 // XMEDIAPACKET word 4 is a union: with a stream completion callback (DSSTREAMDESC.lpfnCallback) it is the per-packet context passed to that callback,
 // otherwise it is the completion event (a kernel handle, or a pointer to a KEVENT).
 void Complete(Packet& p, uint32_t status, Voice* v) {
   if (p.pCompleted) *(uint32_t*)G(p.pCompleted) = p.size;
   if (p.pStatus) *(uint32_t*)G(p.pStatus) = status;
   if (v->cbFn) GuestCall(v->cbFn, 3, v->cbCtx, p.evOrCb, status);
-  else if (p.evOrCb) { if (p.evOrCb >= 0x80000000u) K_KeSetEvent(p.evOrCb, 0, 0); else SetEvent((HANDLE)HandleGet(p.evOrCb)); }
+  else if (p.evOrCb) { if (p.evOrCb >= 0x80000000u) K_KeSetEvent(p.evOrCb, 0, 0); else plat::EventSet((plat::Obj*)HandleGet(p.evOrCb)); }
 }
 
 // Mix one voice into acc (interleaved stereo float) for n output frames. Called with g_mx held; may call guest completion callbacks.
@@ -107,30 +105,18 @@ void MixVoice(Voice* v, float* acc, int n) {
   }
 }
 
-DWORD WINAPI MixerThread(void*) {
-  XThreadInit(0);   // completion callbacks run guest code
-  WAVEFORMATEX wf = {WAVE_FORMAT_PCM, 2, kOutRate, kOutRate * 4, 4, 16, 0}; HWAVEOUT hw = nullptr;
-  HANDLE ev = CreateEventA(nullptr, FALSE, FALSE, nullptr);
-  if (waveOutOpen(&hw, WAVE_MAPPER, &wf, (DWORD_PTR)ev, 0, CALLBACK_EVENT) != MMSYSERR_NOERROR) { Log("[audio] waveOutOpen failed: audio disabled"); return 0; }
-  static int16_t bufs[kNumHdr][kChunk * 2]; WAVEHDR hdr[kNumHdr] = {}; for (int i = 0; i < kNumHdr; i++) { hdr[i].lpData = (LPSTR)bufs[i]; hdr[i].dwBufferLength = sizeof bufs[i]; hdr[i].dwFlags = WHDR_DONE; }
-  Log("[audio] waveOut open: 48 kHz stereo, %d x %d ms", kNumHdr, kChunk * 1000 / kOutRate);
-  for (;;) {
-    bool any = false;
-    for (int i = 0; i < kNumHdr; i++) if (hdr[i].dwFlags & WHDR_DONE) {
-      float acc[kChunk * 2] = {};
-      { static bool first = true; if (first) { first = false; Log("[audio] mixer: first chunk"); } std::lock_guard<std::recursive_mutex> l(g_mx); for (Voice* v : g_voices) MixVoice(v, acc, kChunk); }
-      { static float peak = 0; static int chunks = 0; static int act = 0; for (int k = 0; k < kChunk * 2; k++) { float a = fabsf(acc[k]); if (a > peak) peak = a; } if (++chunks >= 50) { if (g_log) { { std::lock_guard<std::recursive_mutex> l(g_mx); act = 0; for (Voice* v : g_voices) if (v->alive && v->playing && !v->paused) ++act; } Log("[audio] 1 s: peak %.3f, %d active voices of %d", peak, act, (int)g_voices.size()); } chunks = 0; peak = 0; } }
-      for (int k = 0; k < kChunk * 2; k++) { float s = acc[k]; s = s < -1.f ? -1.f : s > 1.f ? 1.f : s; bufs[i][k] = (int16_t)(s * 32767.f); }
-      { static FILE* wav = nullptr; static bool tried = false; static uint32_t bytes = 0;   // XBOX_AUDIO_WAV=path: also write the mix to a 48 kHz stereo 16-bit WAV (header patched at 1 s intervals)
-        if (!tried) { tried = true; if (const char* w = getenv("XBOX_AUDIO_WAV")) { wav = fopen(w, "wb"); if (wav) { uint8_t h[44] = {}; fwrite(h, 1, 44, wav); } } }
-        if (wav) { fwrite(bufs[i], 1, sizeof bufs[i], wav); bytes += sizeof bufs[i]; if ((bytes / sizeof bufs[i]) % 50 == 0) { uint8_t h[44]; memcpy(h, "RIFF", 4); *(uint32_t*)(h + 4) = 36 + bytes; memcpy(h + 8, "WAVEfmt ", 8); *(uint32_t*)(h + 16) = 16; *(uint16_t*)(h + 20) = 1; *(uint16_t*)(h + 22) = 2; *(uint32_t*)(h + 24) = kOutRate; *(uint32_t*)(h + 28) = kOutRate * 4; *(uint16_t*)(h + 32) = 4; *(uint16_t*)(h + 34) = 16; memcpy(h + 36, "data", 4); *(uint32_t*)(h + 40) = bytes; long pos = ftell(wav); fseek(wav, 0, SEEK_SET); fwrite(h, 1, 44, wav); fseek(wav, pos, SEEK_SET); fflush(wav); } } }
-      if (hdr[i].dwFlags & WHDR_PREPARED) waveOutUnprepareHeader(hw, &hdr[i], sizeof hdr[i]);
-      hdr[i].dwFlags = 0; waveOutPrepareHeader(hw, &hdr[i], sizeof hdr[i]); waveOutWrite(hw, &hdr[i], sizeof hdr[i]); any = true;
-    }
-    if (!any) WaitForSingleObject(ev, 20);
-  }
+// Fills one chunk (kChunk stereo frames) of 16-bit output; called by the platform audio backend on its own thread.
+void MixChunk(int16_t* out, void*) {
+  thread_local bool guestInit = false; if (!guestInit) { guestInit = true; XThreadInit(0); }   // completion callbacks run guest code
+  float acc[kChunk * 2] = {};
+  { static bool first = true; if (first) { first = false; Log("[audio] mixer: first chunk"); } std::lock_guard<std::recursive_mutex> l(g_mx); for (Voice* v : g_voices) MixVoice(v, acc, kChunk); }
+  { static float peak = 0; static int chunks = 0; static int act = 0; for (int k = 0; k < kChunk * 2; k++) { float a = fabsf(acc[k]); if (a > peak) peak = a; } if (++chunks >= 50) { if (g_log) { { std::lock_guard<std::recursive_mutex> l(g_mx); act = 0; for (Voice* v : g_voices) if (v->alive && v->playing && !v->paused) ++act; } Log("[audio] 1 s: peak %.3f, %d active voices of %d", peak, act, (int)g_voices.size()); } chunks = 0; peak = 0; } }
+  for (int k = 0; k < kChunk * 2; k++) { float v = acc[k]; v = v < -1.f ? -1.f : v > 1.f ? 1.f : v; out[k] = (int16_t)(v * 32767.f); }
+  { static FILE* wav = nullptr; static bool tried = false; static uint32_t bytes = 0; const size_t chunkBytes = sizeof(int16_t) * kChunk * 2;   // XBOX_AUDIO_WAV=path: also write the mix to a 48 kHz stereo 16-bit WAV (header patched at 1 s intervals)
+    if (!tried) { tried = true; if (const char* w = getenv("XBOX_AUDIO_WAV")) { wav = fopen(w, "wb"); if (wav) { uint8_t h[44] = {}; fwrite(h, 1, 44, wav); } } }
+    if (wav) { fwrite(out, 1, chunkBytes, wav); bytes += (uint32_t)chunkBytes; if ((bytes / chunkBytes) % 50 == 0) { uint8_t h[44]; memcpy(h, "RIFF", 4); *(uint32_t*)(h + 4) = 36 + bytes; memcpy(h + 8, "WAVEfmt ", 8); *(uint32_t*)(h + 16) = 16; *(uint16_t*)(h + 20) = 1; *(uint16_t*)(h + 22) = 2; *(uint32_t*)(h + 24) = kOutRate; *(uint32_t*)(h + 28) = kOutRate * 4; *(uint16_t*)(h + 32) = 4; *(uint16_t*)(h + 34) = 16; memcpy(h + 36, "data", 4); *(uint32_t*)(h + 40) = bytes; long pos = ftell(wav); fseek(wav, 0, SEEK_SET); fwrite(h, 1, 44, wav); fseek(wav, pos, SEEK_SET); fflush(wav); } } }
 }
-void Start() { if (!g_started) { g_started = true; CreateThread(nullptr, 0, MixerThread, nullptr, 0, nullptr); } }
+void Start() { if (!g_started) { g_started = true; if (!plat::AudioOutStart(kOutRate, kChunk, kNumHdr, MixChunk, nullptr)) Log("[audio] no output device: audio disabled"); } }
 
 float Gain(int32_t millibels) { if (millibels <= -10000) return 0.f; if (millibels > 0) millibels = 0; return powf(10.f, millibels / 2000.f); }
 double RateFromPitch(int32_t pitch) { return kOutRate * pow(2.0, pitch / 4096.0); }
@@ -151,7 +137,7 @@ uint32_t GenericVtable() {
   static const uint8_t pops[16] = {4, 4, 8, 8, 12, 4, 4, 8, 8, 8, 8, 8, 8, 8, 8, 8};
   table = GuestAlloc(64); uint32_t* t = (uint32_t*)G(table);
 #ifdef GUEST_IDENTITY
-  uint8_t* code = (uint8_t*)VirtualAlloc(nullptr, 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);   // native-fallback machine code: xor eax,eax / ret N
+  uint8_t* code = (uint8_t*)plat::VmAlloc(nullptr, 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);   // native-fallback machine code: xor eax,eax / ret N
   for (int i = 0; i < 16; i++) { uint8_t* c = code + i * 8; c[0] = 0x33; c[1] = 0xC0; c[2] = 0xC2; c[3] = pops[i]; c[4] = 0; t[i] = (uint32_t)(uintptr_t)c; LiftAddOverride(t[i], nullptr, pops[i]); }
 #else
   for (int i = 0; i < 16; i++) t[i] = LiftSynthAddr(nullptr, pops[i]);   // synthetic guest address: returns 0 and pops its arguments
@@ -166,7 +152,7 @@ uint32_t NewObj(uint32_t kind, Voice* v) {
 }
 }  // namespace
 
-#define H(name, ...) extern "C" uint32_t __stdcall Hle_##name(__VA_ARGS__)
+#define H(name, ...) extern "C" uint32_t PLAT_STDCALL Hle_##name(__VA_ARGS__)
 
 H(DirectSoundCreate, uint32_t guid, uint32_t* pp, uint32_t outer) { Voice* none = new Voice; none->alive = false; *pp = NewObj(0, none); Start(); L("DirectSoundCreate"); return 0; }
 static uint32_t CreateBuffer(uint32_t desc, uint32_t* pp) {

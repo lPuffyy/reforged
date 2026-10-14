@@ -4,7 +4,7 @@
 // done-queue write-back and the interrupt. Bulk and isochronous lists are ignored (no such device).
 #include "kernel.h"
 #include "guestmem.h"
-#include <windows.h>
+#include "plat.h"
 #include <cstring>
 #include <cstdio>
 #include <algorithm>
@@ -26,7 +26,7 @@ bool g_started = false;
 
 uint8_t* Mem(uint32_t a) { return a < 0x4000000u ? KernelRamBase() + a : G(a & 0x7FFFFFFFu); }
 // Descriptors come from guest memory that the guest may be rewriting; a stale pointer reads as zero (end of chain) instead of faulting.
-bool Mapped(const void* p) { MEMORY_BASIC_INFORMATION mi; return VirtualQuery(p, &mi, sizeof mi) && mi.State == MEM_COMMIT && !(mi.Protect & (PAGE_NOACCESS | PAGE_GUARD)) && (uint8_t*)p + 4 <= (uint8_t*)mi.BaseAddress + mi.RegionSize; }
+bool Mapped(const void* p) { return GuestPtrOk(p, 4); }
 uint32_t R32(uint32_t a) { uint32_t* p = (uint32_t*)Mem(a); return Mapped(p) ? *p : 0; }
 void W32(uint32_t a, uint32_t v) { uint32_t* p = (uint32_t*)Mem(a); if (Mapped(p)) *p = v; }
 
@@ -36,7 +36,7 @@ const uint8_t kCfgDesc[32] = {0x09, 0x02, 0x20, 0x00, 0x01, 0x01, 0x00, 0x80, 0x
                               0x07, 0x05, 0x81, 0x03, 0x20, 0x00, 0x04, 0x07, 0x05, 0x02, 0x03, 0x20, 0x00, 0x04};
 const uint8_t kXidDesc[8] = {0x08, 0x42, 0x00, 0x01, 0x01, 0x02, 0x14, 0x06};
 struct Dev { bool present = true; uint8_t addr = 0; uint8_t cfg = 0; std::vector<uint8_t> resp; size_t respPos = 0; bool statusPending = false; uint8_t newAddr = 0; bool setAddr = false;
-             uint32_t lastReport[5] = {}; DWORD lastIn = 0; } g_dev;
+             uint32_t lastReport[5] = {}; uint32_t lastIn = 0; } g_dev;
 
 void Setup(const uint8_t* s) {
   uint8_t type = s[0], req = s[1]; uint16_t value = s[2] | (s[3] << 8), len = s[6] | (s[7] << 8);
@@ -91,7 +91,7 @@ void ServiceEd(uint32_t ed, bool periodic) {
     if (!periodic) return;
     if (en == 1 && dp == 2) {   // interrupt IN: gamepad report
       uint8_t rep[20]; InputXidReport(rep); uint32_t sig[5]; memcpy(sig, rep, 20);
-      DWORD now = GetTickCount();
+      uint32_t now = (uint32_t)plat::TickMs();
       if (memcmp(sig, g_dev.lastReport, 20) == 0 && now - g_dev.lastIn < 60) return;   // NAK: nothing new
       memcpy(g_dev.lastReport, sig, 20); g_dev.lastIn = now;
       uint32_t n = std::min<uint32_t>(len, 20); if (cbp) memcpy(Mem(cbp), rep, n); Retire(ed, td, 0, (n >= len) ? 0 : cbp + n, !toggle);
@@ -109,18 +109,22 @@ void FrameBody() {
   if ((h.control & (1u << 2)) && h.hcca) { for (uint32_t ed = R32(h.hcca + 4 * (h.fmNumber & 31)) & ~0xFu, n = 0; ed && n < 8; ed = R32(ed + 12) & ~0xFu, n++) ServiceEd(ed, true); }
 }
 // The guest rewrites ED/TD chains while we walk them; a stale link can point anywhere, so a bad pointer just ends this frame.
-void Frame() { __try { FrameBody(); } __except (EXCEPTION_EXECUTE_HANDLER) {} }
+#ifdef _MSC_VER
+void Frame() { __try { FrameBody(); } __except (1) {} }   // a bad guest TD pointer must not take the host down
+#else
+void Frame() { FrameBody(); }
+#endif
 
-DWORD WINAPI UsbThread(void*) {
+uint32_t UsbThread(void*) {
   XThreadInit(0);   // the guest ISR runs on this thread
   for (;;) {
-    Sleep(1);
+    plat::SleepMs(1);
     bool fire = false;
     { std::lock_guard<std::recursive_mutex> l(g_mx); Frame(); Hc& h = g_hc[0]; fire = (h.intEnable & 0x80000000u) && (h.intStatus & h.intEnable & 0x7F); }
     if (fire) KernelDeliverInterrupt(0x31);   // USB0 = IRQ 1
   }
 }
-void Start() { if (!g_started) { g_started = true; CreateThread(nullptr, 0, UsbThread, nullptr, 0, nullptr); } }
+void Start() { if (!g_started) { g_started = true; plat::ThreadSpawn(UsbThread); } }
 
 void PortSetConnected(Hc& h) { if (&h == &g_hc[0] && g_dev.present) { h.port[0] |= 1 | (1u << 8) | (1u << 16); h.intStatus |= (1u << 6); } }   // CCS, PPS, CSC; RootHubStatusChange
 }  // namespace

@@ -3,10 +3,8 @@
 // Implemented: ARP, DHCP, ICMP echo (gateway), DNS forwarding, UDP NAT (per-flow host sockets), UDP broadcast pass-through is not done yet. TCP is not implemented.
 // Debug: XBOX_NET_PCAP=path writes every frame in both directions to a pcap file; XBOX_NET_LOG=1 logs frames and flows; XBOX_DNS=a.b.c.d picks the upstream DNS server.
 #include "kernel.h"
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#include <iphlpapi.h>
-#include <windows.h>
+#include "net_sock.h"
+#include "plat.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -49,11 +47,11 @@ bool ForRelay(const uint8_t* f, uint32_t len) {   // frames that belong on the v
   return true;
 }
 void RelaySend(const uint8_t* f, uint32_t len) { if (g_relay == INVALID_SOCKET) return; std::vector<uint8_t> d(4 + len); memcpy(d.data(), "XRL1", 4); memcpy(d.data() + 4, f, len); sendto(g_relay, (const char*)d.data(), (int)d.size(), 0, (sockaddr*)&g_relayAddr, sizeof g_relayAddr); }
-DWORD WINAPI RelayThread(void*) {
-  uint8_t buf[2200]; DWORD lastKeep = 0;
+uint32_t RelayThread(void* ) {
+  uint8_t buf[2200]; uint32_t lastKeep = 0;
   for (;;) {
-    if (GetTickCount() - lastKeep > 4000) { lastKeep = GetTickCount(); sendto(g_relay, "XRL1", 4, 0, (sockaddr*)&g_relayAddr, sizeof g_relayAddr); }
-    fd_set rs; FD_ZERO(&rs); FD_SET(g_relay, &rs); timeval tv{1, 0}; if (select(0, &rs, nullptr, nullptr, &tv) <= 0) continue;
+    if ((uint32_t)plat::TickMs() - lastKeep > 4000) { lastKeep = (uint32_t)plat::TickMs(); sendto(g_relay, "XRL1", 4, 0, (sockaddr*)&g_relayAddr, sizeof g_relayAddr); }
+    fd_set rs; FD_ZERO(&rs); FD_SET(g_relay, &rs); timeval tv{1, 0}; if (select((int)g_relay + 1, &rs, nullptr, nullptr, &tv) <= 0) continue;
     int n = recv(g_relay, (char*)buf, sizeof buf, 0); if (n > 18 && !memcmp(buf, "XRL1", 4)) ToGuest(buf + 4, (uint32_t)n - 4);
   }
 }
@@ -63,7 +61,7 @@ void RelayStart() {
   addrinfo hints = {}, *res = nullptr; hints.ai_family = AF_INET; hints.ai_socktype = SOCK_DGRAM; char ps[16]; sprintf(ps, "%d", port);
   if (getaddrinfo(host, ps, &hints, &res) != 0 || !res) { Log("[net] relay %s: cannot resolve", r); return; }
   memcpy(&g_relayAddr, res->ai_addr, sizeof g_relayAddr); freeaddrinfo(res);
-  g_relay = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP); g_relayOn = true; CreateThread(nullptr, 0, RelayThread, nullptr, 0, nullptr);
+  g_relay = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP); g_relayOn = true; plat::ThreadSpawn(RelayThread, nullptr);
   if (const char* g = getenv("XBOX_GUEST_IP")) { in_addr a; if (inet_pton(AF_INET, g, &a) == 1) kGuestIp = ntohl(a.s_addr); }
   Log("[net] LAN relay %s up, guest IP %u.%u.%u.%u", r, kGuestIp >> 24, (kGuestIp >> 16) & 255, (kGuestIp >> 8) & 255, kGuestIp & 255);
 }
@@ -119,27 +117,27 @@ uint32_t UpstreamDns() {
   ip = (46u << 24) | (101u << 16) | (64u << 8) | 175u; return ip;
 }
 struct DnsJob { std::vector<uint8_t> q; uint16_t guestPort; };
-DWORD WINAPI DnsThread(void* p) {
+uint32_t DnsThread(void* p) {
   DnsJob* j = (DnsJob*)p; SOCKET s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP); sockaddr_in a = {}; a.sin_family = AF_INET; a.sin_port = htons(53); a.sin_addr.s_addr = htonl(UpstreamDns());
-  DWORD to = 3000; setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (char*)&to, sizeof to); sendto(s, (char*)j->q.data(), (int)j->q.size(), 0, (sockaddr*)&a, sizeof a);
+  NetSetRecvTimeoutMs(s, 3000); sendto(s, (char*)j->q.data(), (int)j->q.size(), 0, (sockaddr*)&a, sizeof a);
   uint8_t buf[1500]; int n = recv(s, (char*)buf, sizeof buf, 0); closesocket(s);
   if (n > 0) { NL("DNS answer %d bytes for guest port %u", n, j->guestPort); SendUdp(kDnsIp, 53, kGuestIp, j->guestPort, buf, (uint32_t)n); } else NL("DNS query timed out");
   delete j; return 0;
 }
 void HandleDns(const uint8_t* d, uint32_t len, uint16_t guestPort) {
   if (len < 12) return; { char name[128] = ""; int o = 12, k = 0; while (o < (int)len && d[o] && k < 120) { int l = d[o++]; if (k) name[k++] = '.'; for (int i = 0; i < l && o < (int)len && k < 120; i++) name[k++] = (char)d[o++]; } name[k] = 0; NL("DNS query '%s' type %u", name, o + 2 < (int)len ? Rd16(d + o + 1) : 0); }
-  DnsJob* j = new DnsJob{std::vector<uint8_t>(d, d + len), guestPort}; CreateThread(nullptr, 0, DnsThread, j, 0, nullptr);
+  DnsJob* j = new DnsJob{std::vector<uint8_t>(d, d + len), guestPort}; plat::ThreadSpawn(DnsThread, j);
 }
 
 // ---- UDP NAT: one host socket + receive thread per (guest port, remote ip, remote port) flow ----
-struct Flow { SOCKET s; uint16_t guestPort; uint32_t rip; uint16_t rport; DWORD last; };
+struct Flow { SOCKET s; uint16_t guestPort; uint32_t rip; uint16_t rport; uint32_t last; };
 std::map<uint64_t, Flow*> g_flows; std::mutex g_flowMx;
-DWORD WINAPI FlowThread(void* p) {
+uint32_t FlowThread(void* p) {
   Flow* f = (Flow*)p; uint8_t buf[2048];
   for (;;) {
-    fd_set rs; FD_ZERO(&rs); FD_SET(f->s, &rs); timeval tv = {5, 0}; int r = select(0, &rs, nullptr, nullptr, &tv);
-    if (r < 0) break; if (r == 0) { if (GetTickCount() - f->last > 120000) break; continue; }
-    sockaddr_in from; int fl = sizeof from; int n = recvfrom(f->s, (char*)buf, sizeof buf, 0, (sockaddr*)&from, &fl); if (n <= 0) continue; f->last = GetTickCount();
+    fd_set rs; FD_ZERO(&rs); FD_SET(f->s, &rs); timeval tv = {5, 0}; int r = select((int)f->s + 1, &rs, nullptr, nullptr, &tv);
+    if (r < 0) break; if (r == 0) { if ((uint32_t)plat::TickMs() - f->last > 120000) break; continue; }
+    sockaddr_in from; socklen_t fl = sizeof from; int n = recvfrom(f->s, (char*)buf, sizeof buf, 0, (sockaddr*)&from, &fl); if (n <= 0) continue; f->last = (uint32_t)plat::TickMs();
     NL("UDP %u.%u.%u.%u:%u -> guest:%u %d bytes", ntohl(from.sin_addr.s_addr) >> 24, (ntohl(from.sin_addr.s_addr) >> 16) & 255, (ntohl(from.sin_addr.s_addr) >> 8) & 255, ntohl(from.sin_addr.s_addr) & 255, ntohs(from.sin_port), f->guestPort, n);
     SendUdp(ntohl(from.sin_addr.s_addr), ntohs(from.sin_port), kGuestIp, f->guestPort, buf, (uint32_t)n);
   }
@@ -148,9 +146,9 @@ DWORD WINAPI FlowThread(void* p) {
 void HandleUdpNat(uint32_t dstIp, uint16_t srcPort, uint16_t dstPort, const uint8_t* d, uint32_t len) {
   uint64_t key = (uint64_t)srcPort << 48 | (uint64_t)dstIp << 16 | dstPort; Flow* f = nullptr;
   { std::lock_guard<std::mutex> l(g_flowMx); auto it = g_flows.find(key); if (it != g_flows.end()) f = it->second;
-    else { SOCKET s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP); if (s == INVALID_SOCKET) return; sockaddr_in b = {}; b.sin_family = AF_INET; bind(s, (sockaddr*)&b, sizeof b); f = new Flow{s, srcPort, dstIp, dstPort, GetTickCount()}; g_flows[key] = f; CreateThread(nullptr, 0, FlowThread, f, 0, nullptr);
+    else { SOCKET s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP); if (s == INVALID_SOCKET) return; sockaddr_in b = {}; b.sin_family = AF_INET; bind(s, (sockaddr*)&b, sizeof b); f = new Flow{s, srcPort, dstIp, dstPort, (uint32_t)plat::TickMs()}; g_flows[key] = f; plat::ThreadSpawn(FlowThread, f);
       NL("UDP flow guest:%u -> %u.%u.%u.%u:%u", srcPort, dstIp >> 24, (dstIp >> 16) & 255, (dstIp >> 8) & 255, dstIp & 255, dstPort); } }
-  sockaddr_in a = {}; a.sin_family = AF_INET; a.sin_port = htons(dstPort); a.sin_addr.s_addr = htonl(dstIp); f->last = GetTickCount(); sendto(f->s, (const char*)d, (int)len, 0, (sockaddr*)&a, sizeof a);
+  sockaddr_in a = {}; a.sin_family = AF_INET; a.sin_port = htons(dstPort); a.sin_addr.s_addr = htonl(dstIp); f->last = (uint32_t)plat::TickMs(); sendto(f->s, (const char*)d, (int)len, 0, (sockaddr*)&a, sizeof a);
 }
 
 #include "net_tcp.inc"
@@ -177,7 +175,7 @@ void HandleIpv4(const uint8_t* f, uint32_t len) {
 
 void NetBackendLinkUp() {
   static bool once = false; if (once) return; once = true;
-  if (!g_wsa) { WSADATA w; WSAStartup(MAKEWORD(2, 2), &w); g_wsa = true; }
+  if (!g_wsa) { NetSockInit(); g_wsa = true; }
   if (const char* p = getenv("XBOX_NET_PCAP")) { g_pcap = fopen(p, "wb"); if (g_pcap) { uint32_t h[6] = {0xA1B2C3D4, 0x00040002, 0, 0, 65535, 1}; h[1] = 0x00040002; fwrite(h, 4, 6, g_pcap); } }
   uint8_t mac[6]; NvnetMac(mac); memcpy(g_guestMac, mac, 6); RelayStart();
   Log("[net] backend up: gateway 10.0.2.2, DNS 10.0.2.3 -> %u.%u.%u.%u (guest MAC %02x:%02x:%02x:%02x:%02x:%02x)", UpstreamDns() >> 24, (UpstreamDns() >> 16) & 255, (UpstreamDns() >> 8) & 255, UpstreamDns() & 255, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);

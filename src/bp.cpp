@@ -1,6 +1,14 @@
 // Debug breakpoints on guest code: XBOX_BP="addr,addr,..." (hex). Each hit logs registers and the top of the stack (first 20 hits per address), then execution continues.
 #include "kernel.h"
+#ifndef LIFT_NO_NATIVE   // x86 exception handling is only used by the native-fallback build
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
+#endif
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>

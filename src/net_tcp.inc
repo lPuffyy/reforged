@@ -5,7 +5,7 @@ struct TcpFlow {
   SOCKET s = INVALID_SOCKET; uint16_t gport = 0, rport = 0; uint32_t rip = 0;
   uint32_t gnext = 0 /* next guest sequence number we expect */, snd_una = 0, snd_nxt = 0, gwnd = 8192;
   bool established = false, gfin = false, sentFin = false, dead = false;
-  struct Seg { uint32_t seq; std::vector<uint8_t> data; bool fin; DWORD t; };
+  struct Seg { uint32_t seq; std::vector<uint8_t> data; bool fin; uint32_t t; };
   std::vector<Seg> unacked; std::mutex mx;
 };
 std::map<uint64_t, TcpFlow*> g_tcp; std::mutex g_tcpMx;
@@ -21,30 +21,30 @@ void SendTcp(TcpFlow* f, uint32_t seq, uint8_t flags, const uint8_t* data, uint3
   SendIp(f->rip, kGuestIp, 6, t.data(), (uint32_t)t.size());
 }
 
-DWORD WINAPI TcpThread(void* p) {
+uint32_t TcpThread(void* p) {
   TcpFlow* f = (TcpFlow*)p;
   sockaddr_in a = {}; a.sin_family = AF_INET; a.sin_port = htons(f->rport); a.sin_addr.s_addr = htonl(f->rip);
   f->s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-  u_long nb = 1; ioctlsocket(f->s, FIONBIO, &nb); connect(f->s, (sockaddr*)&a, sizeof a);
+  NetSetNonBlocking(f->s, true); connect(f->s, (sockaddr*)&a, sizeof a);
   fd_set ws, es; FD_ZERO(&ws); FD_ZERO(&es); FD_SET(f->s, &ws); FD_SET(f->s, &es); timeval tv = {6, 0};
-  int r = select(0, nullptr, &ws, &es, &tv); int err = 0, el = sizeof err; getsockopt(f->s, SOL_SOCKET, SO_ERROR, (char*)&err, &el);
+  int r = select((int)f->s + 1, nullptr, &ws, &es, &tv); int err = 0; socklen_t el = sizeof err; getsockopt(f->s, SOL_SOCKET, SO_ERROR, (char*)&err, &el);
   if (r <= 0 || err || FD_ISSET(f->s, &es)) {
     NL("TCP connect to %u.%u.%u.%u:%u failed", f->rip >> 24, (f->rip >> 16) & 255, (f->rip >> 8) & 255, f->rip & 255, f->rport);
-    std::lock_guard<std::mutex> l(f->mx); f->snd_nxt = f->snd_una = GetTickCount(); SendTcp(f, f->snd_nxt, 0x14, nullptr, 0); f->dead = true;   // RST|ACK
+    std::lock_guard<std::mutex> l(f->mx); f->snd_nxt = f->snd_una = (uint32_t)plat::TickMs(); SendTcp(f, f->snd_nxt, 0x14, nullptr, 0); f->dead = true;   // RST|ACK
   } else {
-    nb = 0; ioctlsocket(f->s, FIONBIO, &nb);
-    { std::lock_guard<std::mutex> l(f->mx); f->snd_una = f->snd_nxt = GetTickCount() * 977u; SendTcp(f, f->snd_nxt, 0x12, nullptr, 0, true); f->snd_nxt++; }
+    NetSetNonBlocking(f->s, false);
+    { std::lock_guard<std::mutex> l(f->mx); f->snd_una = f->snd_nxt = (uint32_t)plat::TickMs() * 977u; SendTcp(f, f->snd_nxt, 0x12, nullptr, 0, true); f->snd_nxt++; }
     NL("TCP connected to %u.%u.%u.%u:%u", f->rip >> 24, (f->rip >> 16) & 255, (f->rip >> 8) & 255, f->rip & 255, f->rport);
     uint8_t buf[1400];
     while (!f->dead) {
       { std::lock_guard<std::mutex> l(f->mx);   // retransmit anything unacknowledged for more than 400 ms (the guest NIC can drop frames when its RX ring is full)
-        for (auto& sg : f->unacked) if (GetTickCount() - sg.t > 400) { SendTcp(f, sg.seq, sg.fin ? 0x11 : 0x18, sg.data.data(), (uint32_t)sg.data.size()); sg.t = GetTickCount(); } }
+        for (auto& sg : f->unacked) if ((uint32_t)plat::TickMs() - sg.t > 400) { SendTcp(f, sg.seq, sg.fin ? 0x11 : 0x18, sg.data.data(), (uint32_t)sg.data.size()); sg.t = (uint32_t)plat::TickMs(); } }
       bool canSend; { std::lock_guard<std::mutex> l(f->mx); uint32_t infl = f->snd_nxt - f->snd_una; canSend = f->established && !f->sentFin && infl < (f->gwnd < 24000 ? f->gwnd : 24000); }
-      int sr = 0; if (canSend) { fd_set rs; FD_ZERO(&rs); FD_SET(f->s, &rs); tv = {0, 30000}; sr = select(0, &rs, nullptr, nullptr, &tv); } else Sleep(10);
+      int sr = 0; if (canSend) { fd_set rs; FD_ZERO(&rs); FD_SET(f->s, &rs); tv = {0, 30000}; sr = select((int)f->s + 1, &rs, nullptr, nullptr, &tv); } else plat::SleepMs(10);
       if (sr > 0) {
         int n = recv(f->s, (char*)buf, sizeof buf, 0); std::lock_guard<std::mutex> l(f->mx);
-        if (n > 0) { SendTcp(f, f->snd_nxt, 0x18, buf, n); f->unacked.push_back({f->snd_nxt, std::vector<uint8_t>(buf, buf + n), false, GetTickCount()}); f->snd_nxt += n; }
-        else { SendTcp(f, f->snd_nxt, 0x11, nullptr, 0); f->unacked.push_back({f->snd_nxt, {}, true, GetTickCount()}); f->snd_nxt++; f->sentFin = true; }
+        if (n > 0) { SendTcp(f, f->snd_nxt, 0x18, buf, n); f->unacked.push_back({f->snd_nxt, std::vector<uint8_t>(buf, buf + n), false, (uint32_t)plat::TickMs()}); f->snd_nxt += n; }
+        else { SendTcp(f, f->snd_nxt, 0x11, nullptr, 0); f->unacked.push_back({f->snd_nxt, {}, true, (uint32_t)plat::TickMs()}); f->snd_nxt++; f->sentFin = true; }
       }
       { std::lock_guard<std::mutex> l(f->mx); if (f->sentFin && f->gfin && f->unacked.empty()) break; }
     }
@@ -64,7 +64,7 @@ void HandleTcp(uint32_t dst, const uint8_t* t, uint32_t len) {
       f = new TcpFlow; f->gport = gp; f->rport = rp; f->rip = dst; f->gnext = seq + 1; f->gwnd = wnd;
       { std::lock_guard<std::mutex> l(g_tcpMx); g_tcp[key] = f; }
       NL("TCP SYN guest:%u -> %u.%u.%u.%u:%u", gp, dst >> 24, (dst >> 16) & 255, (dst >> 8) & 255, dst & 255, rp);
-      CreateThread(nullptr, 0, TcpThread, f, 0, nullptr);
+      plat::ThreadSpawn(TcpThread, f);
     }
     return;   // anything else for an unknown flow is ignored (the guest retries or times out)
   }
@@ -79,15 +79,15 @@ void HandleTcp(uint32_t dst, const uint8_t* t, uint32_t len) {
     if (seq == f->gnext && f->s != INVALID_SOCKET) { send(f->s, (const char*)d, (int)dl, 0); f->gnext += dl; }
     SendTcp(f, f->snd_nxt, 0x10, nullptr, 0);
   }
-  if ((fl & 0x01) && seq + dl == f->gnext) { f->gnext++; f->gfin = true; if (f->s != INVALID_SOCKET) shutdown(f->s, SD_SEND); SendTcp(f, f->snd_nxt, 0x10, nullptr, 0); }
+  if ((fl & 0x01) && seq + dl == f->gnext) { f->gnext++; f->gfin = true; if (f->s != INVALID_SOCKET) shutdown(f->s, SHUT_WR); SendTcp(f, f->snd_nxt, 0x10, nullptr, 0); }
 }
 
 // ---- UDP broadcast (System Link): forward the guest's broadcasts to the host LAN and bring LAN broadcasts back ----
 std::map<uint16_t, SOCKET> g_listen; std::mutex g_listenMx;
-DWORD WINAPI ListenThread(void* p) {
+uint32_t ListenThread(void* p) {
   SOCKET s = (SOCKET)(uintptr_t)p; uint8_t buf[2048];
   for (;;) {
-    sockaddr_in from; int fl = sizeof from; int n = recvfrom(s, (char*)buf, sizeof buf, 0, (sockaddr*)&from, &fl); if (n <= 0) { Sleep(50); continue; }
+    sockaddr_in from; socklen_t fl = sizeof from; int n = recvfrom(s, (char*)buf, sizeof buf, 0, (sockaddr*)&from, &fl); if (n <= 0) { plat::SleepMs(50); continue; }
     sockaddr_in me; int ml = sizeof me; getsockname(s, (sockaddr*)&me, &ml); uint32_t src = ntohl(from.sin_addr.s_addr); if (src == 0x7F000001) continue;
     static uint8_t bc[6] = {255, 255, 255, 255, 255, 255};
     NL("LAN broadcast %d bytes from %u.%u.%u.%u:%u -> guest", n, src >> 24, (src >> 16) & 255, (src >> 8) & 255, src & 255, ntohs(from.sin_port));
@@ -99,9 +99,9 @@ void HandleBroadcast(uint16_t sp, uint16_t dp, const uint8_t* d, uint32_t len) {
   { std::lock_guard<std::mutex> l(g_listenMx);
     auto it = g_listen.find(dp);
     if (it == g_listen.end()) {
-      SOCKET ns = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP); BOOL on = 1; setsockopt(ns, SOL_SOCKET, SO_REUSEADDR, (char*)&on, sizeof on); setsockopt(ns, SOL_SOCKET, SO_BROADCAST, (char*)&on, sizeof on);
+      SOCKET ns = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP); int on = 1; setsockopt(ns, SOL_SOCKET, SO_REUSEADDR, (char*)&on, sizeof on); setsockopt(ns, SOL_SOCKET, SO_BROADCAST, (char*)&on, sizeof on);
       sockaddr_in b = {}; b.sin_family = AF_INET; b.sin_port = htons(dp);
-      if (bind(ns, (sockaddr*)&b, sizeof b) == 0) { g_listen[dp] = ns; CreateThread(nullptr, 0, ListenThread, (void*)(uintptr_t)ns, 0, nullptr); s = ns; } else closesocket(ns);
+      if (bind(ns, (sockaddr*)&b, sizeof b) == 0) { g_listen[dp] = ns; plat::ThreadSpawn(ListenThread, (void*)(uintptr_t)ns); s = ns; } else closesocket(ns);
     } else s = it->second; }
   if (s == INVALID_SOCKET) return;
   sockaddr_in a = {}; a.sin_family = AF_INET; a.sin_port = htons(dp); a.sin_addr.s_addr = INADDR_BROADCAST; sendto(s, (const char*)d, (int)len, 0, (sockaddr*)&a, sizeof a);

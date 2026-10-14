@@ -3,7 +3,7 @@
 // Objects are plain host memory blocks. Sound is not produced yet: buffers and streams accept data and report completion so the game keeps running.
 #include "kernel.h"
 #include "guestmem.h"
-#include <windows.h>
+#include "plat.h"
 #include <cstdio>
 #include <cstring>
 #include <map>
@@ -30,12 +30,13 @@ std::vector<HookEntry>& Hooks() { static std::vector<HookEntry> h; return h; }
 }  // namespace
 void HleRegister(const char* name, void* fn) { Hooks().push_back({name, fn}); }
 static std::string g_names[128]; static int g_nameCount = 0; static int g_traceBudget = 400;
-extern "C" void __cdecl DsoundTrace(int idx) { if (getenv("XBOX_DSTRACE") && g_traceBudget > 0) { --g_traceBudget; Log("[dsound] stub call %s", g_names[idx].c_str()); } }
+extern "C" void PLAT_CDECL DsoundTrace(int idx) { if (getenv("XBOX_DSTRACE") && g_traceBudget > 0) { --g_traceBudget; Log("[dsound] stub call %s", g_names[idx].c_str()); } }
 
-// Trampoline for a stubbed entry point: log the call (optional), return 0 and pop N bytes of arguments.
+// Trampoline for a stubbed entry point: log the call (optional), return 0 and pop N bytes of arguments. (x86 machine code: native-fallback builds only.)
+#ifdef GUEST_IDENTITY
 static void* MakeStubTrampoline(int idx, int ret) {
   static uint8_t* pool = nullptr; static size_t used = 0;
-  if (!pool) pool = (uint8_t*)VirtualAlloc(nullptr, 0x4000, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+  if (!pool) pool = (uint8_t*)plat::VmAlloc(nullptr, 0x4000, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
   uint8_t* p = pool + used; uint8_t* s = p;
   *s++ = 0x68; memcpy(s, &idx, 4); s += 4;                                         // push idx
   *s++ = 0xE8; int32_t rel = (int32_t)((uintptr_t)&DsoundTrace - ((uintptr_t)s + 4)); memcpy(s, &rel, 4); s += 4;  // call DsoundTrace
@@ -44,6 +45,7 @@ static void* MakeStubTrampoline(int idx, int ret) {
   if (ret == 0) *s++ = 0xC3; else { *s++ = 0xC2; *s++ = (uint8_t)ret; *s++ = (uint8_t)(ret >> 8); }
   used += 32; return p;
 }
+#endif
 
 int DsoundHleInstall(const char* file) {
   FILE* f = fopen(file, "r");

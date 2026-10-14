@@ -3,7 +3,7 @@
 #include "kernel.h"
 #include "gpu_soft.h"
 #include "gpu_vk.h"
-#include <windows.h>
+#include "plat.h"
 #include <cstdio>
 #include <cstring>
 #include <set>
@@ -222,7 +222,7 @@ uint32_t Pgraph3dDmaInstance(int which) { switch (which) { case 0: return g_dmaC
 // Called when the title swaps buffers (FLIP_STALL): snapshot the colour surface it just finished so the display never shows a half-drawn frame.
 void PgraphFlip() {
   if (GpuVkReady()) { GpuFlip(); return; }
-  { static uint64_t lastDraws = 0; static DWORD lastT = GetTickCount(); static int n = 0; DWORD now = GetTickCount();
+  { static uint64_t lastDraws = 0; static uint32_t lastT = (uint32_t)plat::TickMs(); static int n = 0; uint32_t now = (uint32_t)plat::TickMs();
     if (getenv("XBOX_FRAMELOG") && (n++ % 5) == 0) Log("[frame] flip #%d: %llu draws since last flip, %lu ms since last flip", n, (unsigned long long)(g_draws - lastDraws), now - lastT);
     lastDraws = g_draws; lastT = now; }
   uint32_t dma = g_dmaColor; if (!dma) return;

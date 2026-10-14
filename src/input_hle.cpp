@@ -1,28 +1,27 @@
 // Controller HLE: the title's XAPI/XPP input functions (found with XbSymbolDatabase, work/title/dsound_hle.txt) are replaced so one virtual Xbox gamepad
 // in port 0 always exists. Its state comes from the PC: keyboard (while the game window is focused), a connected XInput pad, and an optional script
 // (XBOX_SCRIPT="seconds:button,..." for unattended runs).
-#include <intrin.h>
 #include "kernel.h"
-#include <windows.h>
+#include "input.h"
+#include "plat.h"
+#include <mutex>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
 
-bool DisplayHasFocus();
-
 namespace {
-struct Pad { uint16_t buttons; uint8_t analog[8]; int16_t lx, ly, rx, ry; };  // XINPUT_GAMEPAD
-
-enum { B_UP = 1, B_DOWN = 2, B_LEFT = 4, B_RIGHT = 8, B_START = 0x10, B_BACK = 0x20, B_LTHUMB = 0x40, B_RTHUMB = 0x80 };
-enum { A_A, A_B, A_X, A_Y, A_BLACK, A_WHITE, A_LT, A_RT };
+typedef HostPad Pad;   // XINPUT_GAMEPAD layout
+enum { B_UP = PAD_UP, B_DOWN = PAD_DOWN, B_LEFT = PAD_LEFT, B_RIGHT = PAD_RIGHT, B_START = PAD_START, B_BACK = PAD_BACK, B_LTHUMB = PAD_LTHUMB, B_RTHUMB = PAD_RTHUMB };
+enum { A_A = PADA_A, A_B = PADA_B, A_X = PADA_X, A_Y = PADA_Y, A_BLACK = PADA_BLACK, A_WHITE = PADA_WHITE, A_LT = PADA_LT, A_RT = PADA_RT };
+std::mutex g_hostPadMx; Pad g_hostPad;   // state pushed by the app shell
 
 struct ScriptEntry { double at; std::string button; };
-std::vector<ScriptEntry> g_script; bool g_scriptLoaded = false; DWORD g_t0 = 0;
+std::vector<ScriptEntry> g_script; bool g_scriptLoaded = false; uint32_t g_t0 = 0;
 
 void LoadScript() {
-  if (g_scriptLoaded) return; g_scriptLoaded = true; g_t0 = GetTickCount();
+  if (g_scriptLoaded) return; g_scriptLoaded = true; g_t0 = (uint32_t)plat::TickMs();
   const char* env = getenv("XBOX_SCRIPT"); if (!env) return;
   char buf[512]; strncpy(buf, env, sizeof buf - 1); buf[sizeof buf - 1] = 0;
   for (char* tok = strtok(buf, ","); tok; tok = strtok(nullptr, ",")) { double t; char name[32]; if (sscanf(tok, "%lf:%31s", &t, name) == 2) g_script.push_back({t, name}); }
@@ -35,25 +34,6 @@ void Press(Pad& p, const std::string& b) {
   else if (b == "black") p.analog[A_BLACK] = 255; else if (b == "white") p.analog[A_WHITE] = 255; else if (b == "lt") p.analog[A_LT] = 255; else if (b == "rt") p.analog[A_RT] = 255;
 }
 
-typedef DWORD(WINAPI* XInputGetStateFn)(DWORD, void*);
-struct PcPad { WORD buttons; BYTE lt, rt; SHORT lx, ly, rx, ry; };
-struct PcState { DWORD packet; PcPad pad; };
-
-void ReadPc(Pad& p) {
-  static XInputGetStateFn fn = nullptr; static bool tried = false;
-  if (!tried) { tried = true; HMODULE m = LoadLibraryA("xinput1_4.dll"); if (!m) m = LoadLibraryA("xinput9_1_0.dll"); if (m) fn = (XInputGetStateFn)GetProcAddress(m, "XInputGetState"); }
-  if (fn) {
-    PcState s{}; if (fn(0, &s) == 0) {
-      WORD b = s.pad.buttons;
-      if (b & 0x0001) p.buttons |= B_UP; if (b & 0x0002) p.buttons |= B_DOWN; if (b & 0x0004) p.buttons |= B_LEFT; if (b & 0x0008) p.buttons |= B_RIGHT;
-      if (b & 0x0010) p.buttons |= B_START; if (b & 0x0020) p.buttons |= B_BACK; if (b & 0x0040) p.buttons |= B_LTHUMB; if (b & 0x0080) p.buttons |= B_RTHUMB;
-      if (b & 0x1000) p.analog[A_A] = 255; if (b & 0x2000) p.analog[A_B] = 255; if (b & 0x4000) p.analog[A_X] = 255; if (b & 0x8000) p.analog[A_Y] = 255;
-      if (b & 0x0100) p.analog[A_WHITE] = 255; if (b & 0x0200) p.analog[A_BLACK] = 255;  // shoulder buttons -> white / black
-      p.analog[A_LT] = s.pad.lt; p.analog[A_RT] = s.pad.rt; p.lx = s.pad.lx; p.ly = s.pad.ly; p.rx = s.pad.rx; p.ry = s.pad.ry;
-    }
-  }
-}
-
 // Remote control (XBOX_REMOTE=1): work/pad_cmd.txt holds "button seconds" lines (e.g. "a 0.3", "down 0.2", "lx 1.0 0.5" = stick x, value, seconds); the host consumes
 // (deletes) the file and holds those buttons for the given time. Lets an operator drive the game one step at a time while looking at screenshots.
 struct Held { std::string b; double until; float v; }; std::vector<Held> g_held;
@@ -64,18 +44,10 @@ void PollRemote(double now) {
 }
 void GetPad(Pad* out) {
   LoadScript(); Pad p; memset(&p, 0, sizeof p);
-  ReadPc(p);
-  if (DisplayHasFocus() || getenv("XBOX_INPUT_ANY")) {
-    auto k = [](int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; };
-    if (k(VK_RETURN)) p.buttons |= B_START; if (k(VK_BACK) || k(VK_ESCAPE)) p.buttons |= B_BACK;
-    if (k(VK_UP)) p.buttons |= B_UP; if (k(VK_DOWN)) p.buttons |= B_DOWN; if (k(VK_LEFT)) p.buttons |= B_LEFT; if (k(VK_RIGHT)) p.buttons |= B_RIGHT;
-    if (k(VK_SPACE)) p.analog[A_A] = 255; if (k('B')) p.analog[A_B] = 255; if (k('X')) p.analog[A_X] = 255; if (k('Y')) p.analog[A_Y] = 255;
-    if (k('Q')) p.analog[A_BLACK] = 255; if (k('E')) p.analog[A_WHITE] = 255; if (k('F')) p.analog[A_LT] = 255; if (k('R')) p.analog[A_RT] = 255;
-    if (k('A')) p.lx = -32000; if (k('D')) p.lx = 32000; if (k('W')) p.ly = 32000; if (k('S')) p.ly = -32000;
-    if (k('J')) p.rx = -32000; if (k('L')) p.rx = 32000; if (k('I')) p.ry = 32000; if (k('K')) p.ry = -32000;
-  }
-  double now = (GetTickCount() - g_t0) / 1000.0;
-  static long calls = 0; ++calls; if (calls % 200 == 0) Log("[xinput] %ld GetState calls (t=%.1fs)", calls, (GetTickCount() - g_t0) / 1000.0);
+  { std::lock_guard<std::mutex> l(g_hostPadMx); p = g_hostPad; }   // pushed by an app shell
+  InputPollPlatform(p);                                           // keyboard / gamepad on desktop
+  double now = ((uint32_t)plat::TickMs() - g_t0) / 1000.0;
+  static long calls = 0; ++calls; if (calls % 200 == 0) Log("[xinput] %ld GetState calls (t=%.1fs)", calls, ((uint32_t)plat::TickMs() - g_t0) / 1000.0);
   for (auto& e : g_script) if (now >= e.at && now < e.at + 1.5) { Press(p, e.button); static double lastLog = -1; if (lastLog != e.at) { lastLog = e.at; Log("[xinput] script press '%s' at %.1fs (GetState calls so far: %ld)", e.button.c_str(), now, calls); } }   // each scripted press is held for 1.5 s (the software renderer polls slowly)
   PollRemote(now);
   for (size_t i = 0; i < g_held.size();) { if (now >= g_held[i].until) { g_held.erase(g_held.begin() + i); continue; } const std::string& b = g_held[i].b; float v = g_held[i].v;
@@ -84,10 +56,12 @@ void GetPad(Pad* out) {
 }
 }  // namespace
 
+void InputSetHostPad(const HostPad& pad) { std::lock_guard<std::mutex> l(g_hostPadMx); g_hostPad = pad; }
+
 // XID (Xbox USB gamepad) input report for the OHCI model (usb_ohci.cpp): [1]=0x14, [2]=digital buttons, [4..11]=A B X Y Black White LT RT, [12..19]=sticks.
 void InputXidReport(uint8_t* r) { Pad p; GetPad(&p); memset(r, 0, 20); r[1] = 0x14; r[2] = (uint8_t)p.buttons; memcpy(r + 4, p.analog, 8); memcpy(r + 12, &p.lx, 2); memcpy(r + 14, &p.ly, 2); memcpy(r + 16, &p.rx, 2); memcpy(r + 18, &p.ry, 2); }
 
-#define H(name, ...) extern "C" uint32_t __stdcall Hle_##name(__VA_ARGS__)
+#define H(name, ...) extern "C" uint32_t PLAT_STDCALL Hle_##name(__VA_ARGS__)
 
 // The XDEVICE_TYPE pointer that means "gamepad": per-title <XBOX_TITLE_DIR>/gamepad_type.txt (hex address, the dashboard asks about several types), otherwise the first type pointer a title asks about.
 static uint32_t* GamepadType(uint32_t* asked) {
@@ -100,7 +74,7 @@ H(XInitDevices, uint32_t count, uint32_t types) { return 0; }
 // XGetDeviceChanges(type, &insertions, &removals): report the gamepad in port 0 as inserted the first time it is asked
 H(XGetDeviceChanges, uint32_t* type, uint32_t* ins, uint32_t* rem) {
   static int log = 6; if (log > 0) { --log; Log("[xinput] XGetDeviceChanges type=%p (first dwords %08x %08x)", type, type ? type[0] : 0, type ? type[1] : 0); }
-  static long chg = 0; ++chg; if (chg % 500 == 0) Log("[xinput] %ld XGetDeviceChanges calls (t=%.1fs)", chg, (GetTickCount() - g_t0) / 1000.0);
+  static long chg = 0; ++chg; if (chg % 500 == 0) Log("[xinput] %ld XGetDeviceChanges calls (t=%.1fs)", chg, ((uint32_t)plat::TickMs() - g_t0) / 1000.0);
   static bool reported = false; if (ins) *ins = 0; if (rem) *rem = 0;
   if (!type || reported) return 0;
   // the gamepad type structure is the one the title passes first; the memory unit / voice types are asked later with other pointers
@@ -108,8 +82,8 @@ H(XGetDeviceChanges, uint32_t* type, uint32_t* ins, uint32_t* rem) {
   if (type == gamepadType) { reported = true; if (ins) *ins = 1; return 1; }
   return 0;
 }
-H(XInputOpen, uint32_t* type, uint32_t port, uint32_t slot, uint32_t params) { static int log = 40; if (log > 0) { --log; Log("[xinput] XInputOpen type=%p port=%u slot=%u from %p", type, port, slot, _ReturnAddress()); } return port == 0 ? 0xC0DE0000u : 0; }
-H(XInputClose, uint32_t handle) { Log("[xinput] XInputClose(0x%x) from %p", handle, _ReturnAddress()); return 0; }
+H(XInputOpen, uint32_t* type, uint32_t port, uint32_t slot, uint32_t params) { static int log = 40; if (log > 0) { --log; Log("[xinput] XInputOpen type=%p port=%u slot=%u from %p", type, port, slot, PLAT_RETADDR()); } return port == 0 ? 0xC0DE0000u : 0; }
+H(XInputClose, uint32_t handle) { Log("[xinput] XInputClose(0x%x) from %p", handle, PLAT_RETADDR()); return 0; }
 H(XInputGetState, uint32_t handle, uint8_t* state) {
   static uint32_t packet = 0; Pad p; GetPad(&p);
   { static long n = 0; ++n; if (n <= 3 || (p.buttons && n % 50 == 0)) Log("[xinput] GetState #%ld handle=%x buttons=%04x A=%d", n, handle, p.buttons, p.analog[A_A]); }

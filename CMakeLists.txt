@@ -1,0 +1,65 @@
+cmake_minimum_required(VERSION 3.20)
+project(reforged CXX)
+
+# The portable build: the relocated guest layout, no native-fallback execution, explicit MMIO routing. This is the configuration used on 64-bit
+# Windows, Linux and (through the app shell) iOS. Translated game code is generated on the user's machine and is never part of this repository:
+# pass its directory with -DREFORGED_LIFTED_DIR=<dir> (contains lift_*.cpp and lift_table.cpp); without it the runtime builds and links on its own.
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+set(REFORGED_LIFTED_DIR "" CACHE PATH "Directory with the locally generated translated code (optional)")
+set(VULKAN_HEADERS_DIR "" CACHE PATH "Vulkan-Headers 'include' directory (contains vulkan/vulkan.h)")
+set(SSE2NEON_DIR "" CACHE PATH "Directory containing sse2neon.h (required on arm64)")
+
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+find_package(Threads REQUIRED)
+
+set(PORTABLE_SOURCES
+  main kernel kernel2 eeprom usb_ohci disc xbe xthread mmio priv bp nv2a pgraph display gpu_soft gpu_vk vk_shaders vk_ffp
+  crypto des lift_rt guestmem nvnet net dsound_hle audio_hle input_hle)
+list(TRANSFORM PORTABLE_SOURCES PREPEND "src/")
+list(TRANSFORM PORTABLE_SOURCES APPEND ".cpp")
+
+if(WIN32)
+  set(PLATFORM_SOURCES src/plat_win.cpp src/input_win.cpp src/display_win.cpp)
+else()
+  set(PLATFORM_SOURCES src/plat_posix.cpp src/input_null.cpp src/display_null.cpp)
+endif()
+
+# Kernel import stubs are generated from tools/kernel_imports.txt and the K_/H_ functions found in src/.
+set(KERNEL_STUBS ${CMAKE_SOURCE_DIR}/src/gen/kernel_stubs.cpp)
+file(GLOB RUNTIME_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/*.cpp)
+add_custom_command(OUTPUT ${KERNEL_STUBS}
+  COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_SOURCE_DIR}/tools/gen_kernel.py
+  DEPENDS ${CMAKE_SOURCE_DIR}/tools/gen_kernel.py ${CMAKE_SOURCE_DIR}/tools/kernel_imports.txt ${RUNTIME_SOURCES}
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  COMMENT "Generating kernel import stubs")
+
+set(LIFTED_SOURCES "")
+if(REFORGED_LIFTED_DIR)
+  file(GLOB LIFTED_SOURCES CONFIGURE_DEPENDS ${REFORGED_LIFTED_DIR}/*.cpp)
+endif()
+
+add_executable(reforged ${PORTABLE_SOURCES} ${PLATFORM_SOURCES} ${KERNEL_STUBS} ${LIFTED_SOURCES})
+target_include_directories(reforged PRIVATE src)
+target_compile_definitions(reforged PRIVATE LIFT_NO_NATIVE LIFT_EXPLICIT_MMIO)
+if(REFORGED_LIFTED_DIR)
+  target_compile_definitions(reforged PRIVATE HAVE_LIFT)
+  target_include_directories(reforged PRIVATE ${REFORGED_LIFTED_DIR})
+endif()
+if(VULKAN_HEADERS_DIR)
+  target_include_directories(reforged PRIVATE ${VULKAN_HEADERS_DIR})
+endif()
+if(SSE2NEON_DIR)
+  target_include_directories(reforged PRIVATE ${SSE2NEON_DIR})
+endif()
+target_link_libraries(reforged PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
+
+if(MSVC)
+  target_compile_definitions(reforged PRIVATE _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
+  target_compile_options(reforged PRIVATE /EHsc /MP)
+  target_link_libraries(reforged PRIVATE winmm user32 gdi32 ws2_32)
+else()
+  target_compile_options(reforged PRIVATE -Wno-unused-result -Wno-format-security -fno-strict-aliasing)
+endif()

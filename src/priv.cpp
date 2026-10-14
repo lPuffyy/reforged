@@ -1,7 +1,15 @@
 // Privileged instructions the title executes (it expects ring 0): port I/O, cli/sti, hlt, cache control, MSR access. They fault with
 // EXCEPTION_PRIV_INSTRUCTION; we emulate or skip them and continue after the instruction. Port reads return what the modelled device says.
 #include "kernel.h"
+#ifndef LIFT_NO_NATIVE   // x86 exception handling is only used by the native-fallback build
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
+#endif
 #include <cstdio>
 #include <cstring>
 #include <map>
