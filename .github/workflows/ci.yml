@@ -88,7 +88,7 @@ jobs:
           rc=$?
           cat e2e.log
           if [ $rc -ne 0 ]; then
-            msg=$(tail -c 6000 e2e.log | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+            msg=$( (grep -E "error|MISMATCH|Traceback|FAIL|fatal|[Uu]ndefined|Assertion" e2e.log | grep -v "Wdeprecated\|warning:" | head -40 | cut -c1-300; echo ----; tail -c 2500 e2e.log) | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
             echo "::error title=translator end-to-end failed::$msg"
           fi
           exit $rc
