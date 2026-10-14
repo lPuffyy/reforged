@@ -7,9 +7,9 @@ root="$(pwd)"
 python -m pip install --quiet capstone
 mkdir -p lt/work/lift
 cd lt
-python "$root/tests/make_test_xbe.py" lift_test.xbe expected.txt
-python "$root/tools/lift_survey.py" lift_test.xbe > survey.log
-python "$root/tools/lift.py" lift_test.xbe --out work/lift/gen > lift.log
+python -I "$root/tests/make_test_xbe.py" lift_test.xbe expected.txt
+python -I "$root/tools/lift_survey.py" lift_test.xbe > survey.log
+python -I "$root/tools/lift.py" lift_test.xbe --out work/lift/gen > lift.log
 tail -3 lift.log
 cmake -S "$root" -B "$root/build-lt" -DCMAKE_BUILD_TYPE=Release -DREFORGED_LIFTED_DIR="$PWD/work/lift/gen" ${CMAKE_EXTRA:-}
 cmake --build "$root/build-lt" --config Release --parallel --target reforged
