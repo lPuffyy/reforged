@@ -191,7 +191,8 @@ std::vector<uint32_t> GenFragmentShader(const FsInfo& f) {
     // Dot-product (bump / reflection) stage modes: stages 1..3 take the dot product of their texture coordinate with the signed-expanded colour of stage 0 (a normal map).
     // 9 DOT_ST: 2D lookup at (dot of stage i-1, dot of stage i); 11 DOT_RFLCT_DIFF: cube lookup along the normal N = (dot1, dot2, dot3);
     // 12 DOT_RFLCT_SPEC: cube lookup along the reflection of the eye vector E = (q1, q2, q3) about N.  (17 DOTPRODUCT stages only feed the later ones.)
-    if (i >= 1 && (f.texMode[i] == 9 || f.texMode[i] == 11 || f.texMode[i] == 12)) {
+    static const bool dotModes = getenv("XBOX_DOTMODES") != nullptr;   // off by default: on the phone it produced black blocky patches on floors and fixed nothing visible; kept for further work
+    if (dotModes && i >= 1 && (f.texMode[i] == 9 || f.texMode[i] == 11 || f.texMode[i] == 12)) {
       uint32_t t0 = s.Load(tV4, reg[8]), rgb0 = s.Shuffle(tV3, t0, t0, {0, 1, 2});
       uint32_t n0 = s.Emit(Spv::OpFSub, tV3, {s.Emit(Spv::OpFMul, tV3, {rgb0, s.CVec(3, s.CFloat(2.f))}), s.CVec(3, one)});
       auto dotAt = [&](int k) { uint32_t tk = s.Load(tV4, inT[k]); return s.Emit(Spv::OpDot, tF, {s.Shuffle(tV3, tk, tk, {0, 1, 2}), n0}); };
