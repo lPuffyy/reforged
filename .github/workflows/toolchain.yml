@@ -59,7 +59,8 @@ jobs:
           set +e
           cli="$(find xbsdb/build -name 'XbSymbolDatabaseCLI' -o -name 'XbSymbolDatabaseCLI.exe' | grep -v '\.pdb$' | head -1)"
           echo "scanner: $cli"
-          python -I tools/make_toolchain_pack.py --llvm-archive llvm.tar.xz --llvm-version "$LLVM_MAJOR" --xbsym-cli "$cli"             --xbsym-license xbsdb/LICENSE --xbsym-commit "$XBSDB_COMMIT" --sse2neon-header sse2neon/sse2neon.h --sse2neon-license sse2neon/LICENSE             --host "${{ matrix.name }}" --out "toolchain-${{ matrix.name }}.zip" > pack.log 2>&1
+          curl -sL -o llvm-LICENSE.TXT "https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-${LLVM_VERSION}/llvm/LICENSE.TXT"
+          python -I tools/make_toolchain_pack.py --llvm-archive llvm.tar.xz --llvm-license llvm-LICENSE.TXT --llvm-version "$LLVM_MAJOR" --xbsym-cli "$cli"             --xbsym-license xbsdb/LICENSE --xbsym-commit "$XBSDB_COMMIT" --sse2neon-header sse2neon/sse2neon.h --sse2neon-license sse2neon/LICENSE             --host "${{ matrix.name }}" --out "toolchain-${{ matrix.name }}.zip" > pack.log 2>&1
           rc=$?
           cat pack.log
           if [ $rc -ne 0 ]; then
