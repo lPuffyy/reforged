@@ -21,11 +21,7 @@ print(z.read('manifest.json').decode())
 PYEOF
 ext=""; [ -f pack/bin/clang.exe ] && ext=".exe"
 pack_clang="$PWD/pack/bin/clang$ext"; pack_lld="$PWD/pack/bin/lld$ext"; scanner="$PWD/pack/xbsym/XbSymbolDatabaseCLI$ext"
-# The official Linux LLVM build links libtinfo.so.5; newer distributions only ship .so.6 (same ABI for what clang uses), so point at it.
-if [ "$(uname -s)" = "Linux" ] && ! ldconfig -p | grep -q 'libtinfo.so.5'; then
-  mkdir -p shim; t6="$(ldconfig -p | awk '/libtinfo.so.6/{print $NF; exit}')"
-  [ -n "$t6" ] && ln -sf "$t6" shim/libtinfo.so.5 && export LD_LIBRARY_PATH="$PWD/shim${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-fi
+# The official Linux LLVM build links libtinfo.so.5 (package libtinfo5 on Ubuntu 22.04 and older, ncurses-compat-libs elsewhere).
 "$pack_clang" --version | head -2
 "$pack_lld" -flavor darwin --version 2>&1 | head -2 || true
 "$scanner" 2>&1 | head -2 || true   # prints its usage
