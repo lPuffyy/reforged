@@ -66,6 +66,7 @@ xcrun simctl terminate "$udid" dev.reforged.app || true
 mkdir -p "$simapp/Frameworks" "$simapp/title"
 cp simmod/reforged_game.dylib "$simapp/Frameworks/reforged_game.dylib"
 cp simmod/lift_test.xbe "$simapp/title/default.xbe"
+echo "test program: no disc needed" > "$simapp/title/no-disc.txt"
 codesign --force --deep -s - "$simapp"
 xcrun simctl install "$udid" "$simapp"
 xcrun simctl launch "$udid" dev.reforged.app

@@ -64,8 +64,8 @@ endif()
 
 # ---- iOS: the runtime as a static library plus the app bundle (built unsigned; the user's sideloading tool signs it) ----
 if(IOS)
-  list(REMOVE_ITEM PLATFORM_SOURCES src/display_null.cpp)
-  list(APPEND PLATFORM_SOURCES src/display_ios.mm)
+  list(REMOVE_ITEM PLATFORM_SOURCES src/display_null.cpp src/input_null.cpp)
+  list(APPEND PLATFORM_SOURCES src/display_ios.mm src/input_ios.mm)
   add_library(reforged_core STATIC ${PORTABLE_SOURCES} ${PLATFORM_SOURCES} ${KERNEL_STUBS})
   target_include_directories(reforged_core PUBLIC src)
   target_compile_definitions(reforged_core PRIVATE LIFT_NO_NATIVE LIFT_EXPLICIT_MMIO REFORGED_EMBEDDED)
@@ -77,10 +77,10 @@ if(IOS)
   endif()
   target_compile_options(reforged_core PRIVATE -Wno-unused-result -Wno-format-security -fno-strict-aliasing)
   target_link_libraries(reforged_core PUBLIC Threads::Threads ${CMAKE_DL_LIBS})
-  target_link_libraries(reforged_core PUBLIC "-framework AudioToolbox" "-framework AVFoundation" "-framework QuartzCore" "-framework Metal")
+  target_link_libraries(reforged_core PUBLIC "-framework AudioToolbox" "-framework AVFoundation" "-framework QuartzCore" "-framework Metal" "-framework GameController")
 
-  add_executable(ReforgedApp MACOSX_BUNDLE ios/main.mm ios/AppDelegate.mm)
-  target_link_libraries(ReforgedApp PRIVATE reforged_core "-framework UIKit" "-framework Foundation")
+  add_executable(ReforgedApp MACOSX_BUNDLE ios/main.mm ios/AppDelegate.mm ios/TouchControls.mm)
+  target_link_libraries(ReforgedApp PRIVATE reforged_core "-framework UIKit" "-framework Foundation" "-framework UniformTypeIdentifiers")
   set_target_properties(ReforgedApp PROPERTIES
     MACOSX_BUNDLE_INFO_PLIST ${CMAKE_SOURCE_DIR}/ios/Info.plist.in
     MACOSX_BUNDLE_GUI_IDENTIFIER dev.reforged.app
