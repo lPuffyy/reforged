@@ -514,6 +514,29 @@ static void GpuDrawImpl(uint32_t prim, const SoftVertex* verts, size_t n) {
 
 // Buffer swap: present the render target the title just finished.
 static void GpuFlipImpl();
+// Frame dump (debug): XBOX_FRAMEDUMP="300,600" dumps at those flip numbers, "every=120" every 120 flips. Writes frame_<flip>_<n>.bmp (n=0: the presented image, then the most
+// recently written other render targets) into the working directory and logs each image's mean colour (the numbers alone are enough to compare two machines).
+static bool FrameDumpDue(int flip) {
+  static const char* e = getenv("XBOX_FRAMEDUMP"); if (!e || !*e) return false;
+  if (!strncmp(e, "every=", 6)) { int n = atoi(e + 6); return n > 0 && flip > 0 && flip % n == 0; }
+  for (const char* q = e; *q;) { if (atoi(q) == flip) return true; while (*q && *q != ',') ++q; if (*q == ',') ++q; }
+  return false;
+}
+struct DumpReq { uint8_t* p; int w, h, n; };
+static void WriteDump(int flip, const DumpReq& d) {
+  size_t px = (size_t)d.w * d.h; double sum[3] = {0, 0, 0};
+  for (size_t i = 0; i < px; i += 3) { sum[0] += d.p[i * 4 + 2]; sum[1] += d.p[i * 4 + 1]; sum[2] += d.p[i * 4]; }   // image is BGRA
+  double cnt = (double)(px / 3 + 1);
+  Log("[dump] flip %d image %d %dx%d mean RGB = (%.1f %.1f %.1f)", flip, d.n, d.w, d.h, sum[0] / cnt, sum[1] / cnt, sum[2] / cnt);
+  char name[96]; snprintf(name, sizeof name, "frame_%d_%d.bmp", flip, d.n);
+  FILE* f = fopen(name, "wb"); if (!f) return;
+  uint32_t fsz = 54 + (uint32_t)px * 4, z = 0, off = 54, hs = 40, pl = 1 | (32 << 16); int32_t w = d.w, h = d.h;
+  fwrite("BM", 1, 2, f); fwrite(&fsz, 4, 1, f); fwrite(&z, 4, 1, f); fwrite(&off, 4, 1, f); fwrite(&hs, 4, 1, f); fwrite(&w, 4, 1, f); fwrite(&h, 4, 1, f);
+  fwrite(&pl, 4, 1, f); for (int i = 0; i < 6; i++) fwrite(&z, 4, 1, f);
+  for (int y = d.h - 1; y >= 0; y--) fwrite(d.p + (size_t)y * d.w * 4, 4, d.w, f);   // bottom-up rows
+  fclose(f);
+}
+
 void GpuFlip() {
   uint64_t t = NowUs(); if (!g_statT0) g_statT0 = t;
   GpuFlipImpl();
@@ -544,12 +567,30 @@ static void GpuFlipImpl() {
   vkCmdBlitImage(cb, rtc.img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, g_swapImages[ix], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bl, VK_FILTER_LINEAR);
   const uint8_t* lumPtr = nullptr; int lumW = g_rt->w, lumH = g_rt->h; static bool lumOn = getenv("XBOX_LUMLOG") != nullptr;   // XBOX_LUMLOG=1: read the presented image back and log its mean brightness per flip (with the draw cap), for automated bisection
   if (lumOn) { uint8_t* dst; size_t off = RingAlloc((size_t)lumW * lumH * 4, 16, &dst); VkBufferImageCopy bc{}; bc.bufferOffset = off; bc.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}; bc.imageExtent = {(uint32_t)lumW, (uint32_t)lumH, 1}; vkCmdCopyImageToBuffer(cb, rtc.img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, fr.ring.b, 1, &bc); lumPtr = dst; }
+  std::vector<DumpReq> dumpReqs;
+  if (FrameDumpDue(g_dbgFlips)) {
+    auto grab = [&](Img& im, int w, int h, int n, bool inTransferSrc) {
+      if (im.layout == VK_IMAGE_LAYOUT_UNDEFINED) return;
+      VkImageLayout orig = im.layout;
+      if (!inTransferSrc) Barrier(cb, im, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, VK_ACCESS_MEMORY_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+      uint8_t* dst; size_t off = RingAlloc((size_t)w * h * 4, 16, &dst);
+      VkBufferImageCopy bc{}; bc.bufferOffset = off; bc.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}; bc.imageExtent = {(uint32_t)w, (uint32_t)h, 1};
+      vkCmdCopyImageToBuffer(cb, im.img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, fr.ring.b, 1, &bc);
+      if (!inTransferSrc) Barrier(cb, im, orig, VK_IMAGE_ASPECT_COLOR_BIT, VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+      dumpReqs.push_back({dst, w, h, n});
+    };
+    grab(rtc, g_rt->w, g_rt->h, 0, true);
+    std::vector<RenderTarget*> others; for (auto* r : g_rts) if (r != g_rt && r->lastWrite && r->color.img && r->w * r->h <= 1280 * 960) others.push_back(r);
+    std::sort(others.begin(), others.end(), [](RenderTarget* x, RenderTarget* y) { return x->lastWrite > y->lastWrite; });
+    for (size_t i = 0; i < others.size() && i < 5; i++) grab(others[i]->color, others[i]->w, others[i]->h, (int)i + 1, false);
+  }
   sb.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL; sb.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR; sb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT; sb.dstAccessMask = 0;
   vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1, &sb); g_swapLayouts[ix] = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
   vkEndCommandBuffer(cb); fr.recording = false;
   VkPipelineStageFlags wait = VK_PIPELINE_STAGE_TRANSFER_BIT;
   VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO}; si.waitSemaphoreCount = 1; si.pWaitSemaphores = &fr.imageAvail; si.pWaitDstStageMask = &wait; si.commandBufferCount = 1; si.pCommandBuffers = &cb; si.signalSemaphoreCount = 1; si.pSignalSemaphores = &fr.renderDone;
   vkResetFences(g_dev, 1, &fr.fence); CHK(vkQueueSubmit(g_queue, 1, &si, fr.fence));
+  if (!dumpReqs.empty()) { vkWaitForFences(g_dev, 1, &fr.fence, VK_TRUE, ~0ull); for (auto& q : dumpReqs) WriteDump(g_dbgFlips, q); }
   if (lumPtr) { vkWaitForFences(g_dev, 1, &fr.fence, VK_TRUE, ~0ull); double sum = 0; size_t n = (size_t)lumW * lumH; for (size_t i = 0; i < n; i += 7) sum += lumPtr[i * 4] + lumPtr[i * 4 + 1] + lumPtr[i * 4 + 2]; Log("[lum] flip %d cap %d tailK %d ovCap %d lastframe-draws %d mean %.2f", g_dbgFlips, g_capSweep, g_tailK, g_ovCap, g_lastFrameDraws, sum / (n / 7 + 1) / 3); }
   VkPresentInfoKHR pi{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR}; pi.waitSemaphoreCount = 1; pi.pWaitSemaphores = &fr.renderDone; pi.swapchainCount = 1; pi.pSwapchains = &g_swap; pi.pImageIndices = &ix; vkQueuePresentKHR(g_queue, &pi);
   g_fi ^= 1; ++g_frameNo; g_rendering = false;

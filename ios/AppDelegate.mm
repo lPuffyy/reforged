@@ -73,6 +73,16 @@ extern "C" void ReforgedSetMetalLayer(void* layer);
   NSFileManager* fm = [NSFileManager defaultManager];
   NSString* docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
   [fm changeCurrentDirectoryPath:docs];
+  // Debug switches: Documents/reforged.env, one KEY=VALUE per line (# starts a comment); each becomes an environment variable before the runtime starts.
+  {
+    NSString* envText = [NSString stringWithContentsOfFile:[docs stringByAppendingPathComponent:@"reforged.env"] encoding:NSUTF8StringEncoding error:nil];
+    for (NSString* raw in [envText componentsSeparatedByCharactersInSet:[NSCharacterSet newlineCharacterSet]]) {
+      NSString* line = [raw stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+      if (!line.length || [line hasPrefix:@"#"]) continue;
+      NSRange eq = [line rangeOfString:@"="]; if (eq.location == NSNotFound || eq.location == 0) continue;
+      setenv([[line substringToIndex:eq.location] UTF8String], [[line substringFromIndex:eq.location + 1] UTF8String], 1);
+    }
+  }
   NSString* bundle = [[NSBundle mainBundle] bundlePath];
   self.xbe = [bundle stringByAppendingPathComponent:@"title/default.xbe"];
   NSString* module = [bundle stringByAppendingPathComponent:@"Frameworks/reforged_game.dylib"];
