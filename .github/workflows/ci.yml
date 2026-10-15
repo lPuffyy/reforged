@@ -150,7 +150,7 @@ jobs:
           rc=$?
           tail -c 20000 ios_app.log
           if [ $rc -ne 0 ]; then
-            msg=$( (grep -E "error|FAILED|not |Traceback|failed|\*\* BUILD" ios_app.log | grep -v "warning:" | head -40 | cut -c1-300; echo ----; tail -c 2500 ios_app.log) | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+            msg=$( (sed -n '/=== run in the simulator/,$p' ios_app.log | cut -c1-260 | head -70; echo ----; grep -E "error:|FAILED|not |Traceback|failed" ios_app.log | grep -v "warning:" | head -12 | cut -c1-260) | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
             echo "::error title=ios app failed::$msg"
           fi
           exit $rc
