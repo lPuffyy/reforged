@@ -199,7 +199,7 @@ Tex GetTexture(int i) {
     uint32_t pr = R(base + 0x20), pdma = (pr & 1) ? Pgraph3dDmaInstance(3) : Pgraph3dDmaInstance(2);
     if (pdma) { uint32_t plim; t.pal = (const uint32_t*)(Nv2aDmaMap(pdma, &plim) + (pr & 0xFFFFFFC0u)); t.palLen = 256 >> ((pr >> 2) & 3); }
   }
-  bool linear = t.fmt >= 0x10 && t.fmt != 0x2C && !(t.fmt >= 0x0C && t.fmt <= 0x0F) && (t.fmt <= 0x20 || t.fmt >= 0x24);
+  bool linear = t.fmt >= 0x10 && t.fmt != 0x2C && t.fmt != 0x19 && t.fmt != 0x1A && !(t.fmt >= 0x0C && t.fmt <= 0x0F) && (t.fmt <= 0x20 || t.fmt >= 0x24);   // (0x19 swizzled A8 and 0x1A swizzled A8Y8 sit in the linear range but are swizzled)
   t.swizzled = !linear && !(t.fmt >= 0x0C && t.fmt <= 0x0F);
   if (t.fmt >= 0x0C && t.fmt <= 0x0F) t.swizzled = false;
   t.linear = linear;
