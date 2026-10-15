@@ -11,7 +11,8 @@ Nothing this program produces is uploaded anywhere. The personal app contains co
 """
 import argparse, glob, hashlib, io, json, os, platform, re, shutil, subprocess, sys, tempfile, time, urllib.request, zipfile
 
-HERE = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))   # frozen builds unpack the tools next to the program
+BASE = getattr(sys, '_MEIPASS', os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # frozen builds unpack the repository layout (tools/, src/) here
+HERE = os.path.join(BASE, 'tools')
 sys.path.insert(0, HERE)
 REPO = 'lPuffyy/reforged'
 # Public key that release signatures are checked against (32 bytes, hex). Set when the project's release key is created; until then downloads are refused.

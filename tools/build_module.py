@@ -9,7 +9,8 @@ import argparse, concurrent.futures, glob, os, re, shutil, subprocess, sys, time
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 def run(cmd):
-    p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    try: p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    except OSError as e: return 127, 'cannot run %s: %s' % (cmd[0], e)
     return p.returncode, p.stdout
 
 def main():

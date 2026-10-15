@@ -187,3 +187,49 @@ jobs:
       - name: Signing interoperability
         run: bash tests/sign_verify.sh
 
+  # The companion as a single file per operating system (what users download).
+  companion-frozen:
+    needs: hygiene
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: windows-x64, os: windows-latest, exe: reforged-companion.exe }
+          - { name: linux-x64, os: ubuntu-latest, exe: reforged-companion }
+          - { name: macos-arm64, os: macos-14, exe: reforged-companion }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Freeze
+        shell: bash
+        run: |
+          python -m pip install --quiet pyinstaller capstone
+          python -I tools/freeze_companion.py --out dist
+          ls -l dist/${{ matrix.exe }}
+      - name: Linux extras (compiler for the full run)
+        if: matrix.name == 'linux-x64'
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq clang lld llvm
+          git clone --depth 1 --branch v1.8.0 https://github.com/DLTcollab/sse2neon.git "$RUNNER_TEMP/sse2neon"
+      - name: Test the frozen program
+        shell: bash
+        run: |
+          set +e
+          export COMPANION_FULL=$([ "${{ matrix.name }}" = "linux-x64" ] && echo 1 || echo 0)
+          export SSE2NEON_DIR="$RUNNER_TEMP/sse2neon"
+          bash tests/companion_frozen.sh dist/${{ matrix.exe }} > frozen.log 2>&1
+          rc=$?
+          cat frozen.log
+          if [ $rc -ne 0 ]; then
+            msg=$( (grep -E "error|Traceback|should|not run|not read|Assertion" frozen.log | head -25 | cut -c1-300; echo ----; tail -c 2500 frozen.log) | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+            echo "::error title=frozen companion test failed (${{ matrix.name }})::$msg"
+          fi
+          exit $rc
+      - uses: actions/upload-artifact@v4
+        with:
+          name: companion-${{ matrix.name }}
+          path: dist/${{ matrix.exe }}
+
