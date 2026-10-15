@@ -69,6 +69,8 @@ VkInstance g_inst; VkPhysicalDevice g_phys; VkDevice g_dev; VkQueue g_queue; uin
 std::vector<VkImage> g_swapImages; std::vector<VkImageLayout> g_swapLayouts;
 VkPhysicalDeviceMemoryProperties g_memProps; VkPhysicalDeviceProperties g_props;
 VkDescriptorSetLayout g_dsl; VkPipelineLayout g_playout; VkSampler g_samplers[2][2][2];
+int g_drawLogFlip = -100;   // the last flip whose draws were logged (XBOX_FRAMEDUMP=sync dumps the images of those same flips)
+uint32_t g_startMs = (uint32_t)plat::TickMs();   // process start, for the elapsed time in log lines
 VkPipelineCache g_pcache = VK_NULL_HANDLE; size_t g_pcacheSaved = 0;   // persisted in pipeline_cache.bin (working directory): shaders compile once, not on every launch
 Frame g_frames[2]; int g_fi = 0; uint64_t g_frameNo = 0; bool g_ok = false, g_tried = false;
 std::vector<RenderTarget*> g_rts; RenderTarget* g_rt = nullptr; bool g_rendering = false;
@@ -519,6 +521,19 @@ static void GpuDrawImpl(uint32_t prim, const SoftVertex* verts, size_t n) {
   }
   vkUpdateDescriptorSets(g_dev, (uint32_t)ws.size(), ws.data(), 0, nullptr);
   // ---- pipeline + draw ----
+  {   // XBOX_DRAWLOG=<first flip>,<count>: one line per draw in those flips (shader hashes, texture modes, render target, blend, depth, textures); compare two machines draw by draw
+    static const char* dl = getenv("XBOX_DRAWLOG"); static int dl0 = -1, dln = 0, every = 0, armedAt = -1; static bool parsed = false;
+    if (dl && !parsed) { parsed = true; if (!strncmp(dl, "every=", 6)) every = atoi(dl + 6); else if (!strcmp(dl, "file")) every = -1; else sscanf(dl, "%d,%d", &dl0, &dln); }
+    if (dl && every == -1 && armedAt < 0) { if (FILE* ff = fopen("drawlog.flag", "rb")) { fclose(ff); remove("drawlog.flag"); armedAt = g_dbgFlips; } }   // file mode: create drawlog.flag to log the next two flips
+    bool logNow = dl && ((every > 0 && g_dbgFlips > 0 && (g_dbgFlips % every) < 2) || (every == -1 && armedAt >= 0 && g_dbgFlips >= armedAt && g_dbgFlips < armedAt + 2) || (every == 0 && g_dbgFlips >= dl0 && g_dbgFlips < dl0 + dln));
+    if (every == -1 && armedAt >= 0 && g_dbgFlips >= armedAt + 2) armedAt = -1;
+    if (logNow) { g_drawLogFlip = g_dbgFlips;
+      char tx[256]; tx[0] = 0; size_t tp = 0;
+      for (int t = 0; t < 4; t++) if (fi.texPresent[t] && tp < 200) tp += snprintf(tx + tp, sizeof tx - tp, " t%d:f%02x%s%dx%d", t, (R(0x1B04 + 64 * t) >> 8) & 0xFF, fi.texCube[t] ? "C" : (rtTex[t] || selfSnap[t] ? "R" : ""), tex[t] ? tex[t]->img.w : 0, tex[t] ? tex[t]->img.h : 0);
+      Log("[drawlog] flip %d draw %d rt=%dx%d@%x prim=%u n=%zu vs=%08x fs=%08x modes=%u,%u,%u,%u stages=%u blend=%u(%x,%x) depth=%u/%u%s", g_dbgFlips, g_frameDraws, rt->w, rt->h, rt->offset, prim, n, (unsigned)vhash, (unsigned)fhash,
+          fi.texMode[0], fi.texMode[1], fi.texMode[2], fi.texMode[3], fi.numStages, R(0x304) != 0, R(0x344), R(0x348), R(0x30C) != 0, R(0x35C) != 0, tx);
+    }
+  }
   PipeKey pk{}; pk.vs = vhash; pk.fs = fhash; pk.usedMask = used; pk.blendEnable = R(0x304) != 0; pk.sfac = R(0x344); pk.dfac = R(0x348); pk.eq = R(0x350); pk.depthTest = R(0x30C) != 0; pk.depthFunc = R(0x354); pk.depthMask = R(0x35C) != 0;
   { static int zl = 0; if (zl++ < 6) Log("[vk] depth state: test=%u mask=%u func=0x%x zeta=0x%x (RT 0x%x)", pk.depthTest, pk.depthMask, pk.depthFunc, R(0x214), rt->offset); }
   if (pk.depthTest && pk.depthMask) { rt->zeta = R(0x214); rt->lastDepthWrite = g_drawSerial + 1; }
@@ -555,6 +570,7 @@ static void GpuFlipImpl();
 // recently written other render targets) into the working directory and logs each image's mean colour (the numbers alone are enough to compare two machines).
 static bool FrameDumpDue(int flip) {
   static const char* e = getenv("XBOX_FRAMEDUMP"); if (!e || !*e) return false;
+  if (!strcmp(e, "sync")) return flip >= g_drawLogFlip && flip <= g_drawLogFlip + 1 && g_drawLogFlip >= 0;
   if (!strncmp(e, "every=", 6)) { int n = atoi(e + 6); return n > 0 && flip > 0 && flip % n == 0; }
   for (const char* q = e; *q;) { if (atoi(q) == flip) return true; while (*q && *q != ',') ++q; if (*q == ',') ++q; }
   return false;
@@ -564,7 +580,8 @@ static void WriteDump(int flip, const DumpReq& d) {
   size_t px = (size_t)d.w * d.h; double sum[3] = {0, 0, 0};
   for (size_t i = 0; i < px; i += 3) { sum[0] += d.p[i * 4 + 2]; sum[1] += d.p[i * 4 + 1]; sum[2] += d.p[i * 4]; }   // image is BGRA
   double cnt = (double)(px / 3 + 1);
-  Log("[dump] flip %d image %d %dx%d mean RGB = (%.1f %.1f %.1f)", flip, d.n, d.w, d.h, sum[0] / cnt, sum[1] / cnt, sum[2] / cnt);
+  static const uint32_t t0 = (uint32_t)plat::TickMs();   // (the first dump happens a while after start: add the time of the first dump to compare runs)
+  Log("[dump] flip %d t=%.1fs image %d %dx%d mean RGB = (%.1f %.1f %.1f)", flip, ((uint32_t)plat::TickMs() - g_startMs) / 1000.0, d.n, d.w, d.h, sum[0] / cnt, sum[1] / cnt, sum[2] / cnt); (void)t0;
   if (!d.file) return;
   char name[96]; snprintf(name, sizeof name, "frame_%d_%d.bmp", flip, d.n);
   FILE* f = fopen(name, "wb"); if (!f) return;
