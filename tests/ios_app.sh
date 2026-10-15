@@ -7,6 +7,14 @@ set -euo pipefail
 root="$(pwd)"
 echo "=== device build and IPA"
 bash ios/build_ipa.sh
+python3 -I - <<'PYEOF2'
+import zipfile
+n = zipfile.ZipFile('Reforged-unsigned.ipa').namelist()
+need = ['Payload/ReforgedApp.app/AppIcon60x60@2x.png', 'Payload/ReforgedApp.app/AppIcon60x60@3x.png']
+missing = [f for f in need if f not in n]
+assert not missing, ('the app icon is not in the app', missing, [x for x in n if x.count('/') == 2][:20])
+print('app icon present')
+PYEOF2
 
 echo "=== simulator build"
 cmake -S . -B build-sim -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=iphonesimulator -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \

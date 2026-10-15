@@ -84,6 +84,10 @@ if(IOS)
   target_compile_options(reforged_core PRIVATE $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
   add_executable(ReforgedApp MACOSX_BUNDLE ios/main.mm ios/AppDelegate.mm ios/TouchControls.mm)
   target_compile_options(ReforgedApp PRIVATE -fobjc-arc)
+  # app icon: loose PNGs at the bundle root, named in Info.plist (CFBundleIcons)
+  file(GLOB REFORGED_ICONS ${CMAKE_SOURCE_DIR}/ios/icons/AppIcon60x60*.png ${CMAKE_SOURCE_DIR}/ios/icons/AppIcon76x76*.png ${CMAKE_SOURCE_DIR}/ios/icons/AppIcon83.5x83.5*.png)
+  target_sources(ReforgedApp PRIVATE ${REFORGED_ICONS})
+  set_source_files_properties(${REFORGED_ICONS} PROPERTIES MACOSX_PACKAGE_LOCATION "")
   target_link_libraries(ReforgedApp PRIVATE reforged_core "-framework UIKit" "-framework Foundation" "-framework UniformTypeIdentifiers")
   set_target_properties(ReforgedApp PROPERTIES
     MACOSX_BUNDLE_INFO_PLIST ${CMAKE_SOURCE_DIR}/ios/Info.plist.in

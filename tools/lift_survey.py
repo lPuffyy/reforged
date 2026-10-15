@@ -170,6 +170,24 @@ for (n_, v_, vs_, raw_, rs_) in code:
 for t_ in pad_new: funcs.add(t_); work.append(t_)
 print('padding-boundary function entries: +%d' % len(pad_new))
 descend()
+# Unreached code packed directly behind a ret/jmp (no padding, no caller we could see: leaf functions reached through vtables or callbacks): if it decodes as plain code to its own ret
+# within a short distance it is a function entry; repeat, since each new function exposes the next one.
+for rnd_ in range(64):
+    pk_new = []
+    for t_ in sorted(term_ends):
+        if t_ in seen or t_ in funcs or not in_code(t_): continue
+        if rd(t_, 1) in (bytes([0xcc]), bytes([0x90]), bytes([0])): continue
+        n_ = 0; ok_ = False
+        for i_ in md.disasm(rd(t_, 80), t_):
+            n_ += 1
+            if i_.mnemonic in BAD_ or i_.mnemonic == 'int3': break
+            if i_.mnemonic == 'ret': ok_ = True; break
+            if i_.mnemonic == 'jmp' and n_ >= 2: ok_ = True; break
+        if ok_: pk_new.append(t_)
+    if not pk_new: break
+    for t_ in pk_new: funcs.add(t_); work.append(t_)
+    descend()
+    print('packed leaf function entries round %d: +%d' % (rnd_, len(pk_new)))
 print('\nreached instructions: %d in %d functions; undecodable stops: %d' % (insns, len(funcs), bad))
 print('indirect calls %d, indirect jumps %d (jump-table candidates %d), returns %d' % (ind_calls, ind_jmps, len(jt_cands), rets))
 tot = sum(len(rd(v, rs)) for (_, v, vs, raw, rs) in code)
