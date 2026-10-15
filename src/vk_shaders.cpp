@@ -369,6 +369,28 @@ std::vector<uint32_t> GenFragmentShader(const FsInfo& f) {
   return s.Finish();
 }
 
+
+// ---- partial-channel clears: a full-screen triangle (no vertex input) and a constant colour, drawn with a colour write mask ----
+std::vector<uint32_t> GenClearVertexShader() {
+  Spv s; uint32_t tF = s.TFloat(), tV4 = s.TVec4(), tI = s.TInt(true); std::vector<uint32_t> iface;
+  uint32_t inIdx = s.Variable(tI, Spv::Input); s.Decorate(inIdx, Spv::D_BuiltIn, {42}); iface.push_back(inIdx);   // gl_VertexIndex
+  uint32_t pv = s.TStruct({tV4}); s.Decorate(pv, Spv::D_Block); s.MemberDecorate(pv, 0, Spv::D_BuiltIn, {Spv::B_Position});
+  uint32_t posOut = s.Variable(pv, Spv::Output); iface.push_back(posOut);
+  s.BeginMain();
+  uint32_t zero = s.CFloat(0.f), one = s.CFloat(1.f), two = s.CFloat(2.f), four = s.CFloat(4.f), m1 = s.CFloat(-1.f);
+  uint32_t f = s.Emit(Spv::OpConvertSToF, tF, {s.Load(tI, inIdx)});
+  // vertices (-1,-1) (3,-1) (-1,3): x = -1 + 4 f (2 - f), y = -1 + 2 f (f - 1)
+  uint32_t x = s.Emit(Spv::OpFAdd, tF, {m1, s.Emit(Spv::OpFMul, tF, {four, s.Emit(Spv::OpFMul, tF, {f, s.Emit(Spv::OpFSub, tF, {two, f})})})});
+  uint32_t y = s.Emit(Spv::OpFAdd, tF, {m1, s.Emit(Spv::OpFMul, tF, {two, s.Emit(Spv::OpFMul, tF, {f, s.Emit(Spv::OpFSub, tF, {f, one})})})});
+  s.Store(s.Emit(Spv::OpAccessChain, s.TPtr(Spv::Output, tV4), {posOut, s.CInt(0)}), s.Vec4(x, y, zero, one));
+  s.EndMain(); s.Header(false, iface); return s.Finish();
+}
+std::vector<uint32_t> GenClearFragmentShader(float r, float g, float b, float a) {
+  Spv s; uint32_t tV4 = s.TVec4(); std::vector<uint32_t> iface;
+  uint32_t out = s.Variable(tV4, Spv::Output); s.Decorate(out, Spv::D_Location, {0}); iface.push_back(out);
+  s.BeginMain(); s.Store(out, s.CVec4(r, g, b, a)); s.EndMain(); s.Header(true, iface); return s.Finish();
+}
+
 // ---- bisecting helpers: trivial shaders with the same interfaces ----
 std::vector<uint32_t> GenSimpleFragmentShader() {
   Spv s; uint32_t tV4 = s.TVec4(); std::vector<uint32_t> iface;

@@ -27,4 +27,6 @@ struct FsInfo {
 // texSize[4] (xy = texel size of linear textures) @304, alphaRef (x, 0..255) @368. Samplers: set 0, binding 1..4.
 std::vector<uint32_t> GenFragmentShader(const FsInfo& info);
 std::vector<uint32_t> GenSimpleFragmentShader();
+std::vector<uint32_t> GenClearVertexShader();   // full-screen triangle from gl_VertexIndex
+std::vector<uint32_t> GenClearFragmentShader(float r, float g, float b, float a);   // constant colour
 std::vector<uint32_t> GenSimpleVertexShader(uint32_t* usedInputs);

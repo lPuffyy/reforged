@@ -39,7 +39,7 @@ bool SoftDecodeTexture(int stage, std::vector<uint32_t>* bgra, int* w, int* h, u
   X(vkCreatePipelineCache) X(vkGetPipelineCacheData) X(vkDestroyPipelineCache) X(vkCreateGraphicsPipelines) X(vkDestroyPipeline) X(vkCreateCommandPool) X(vkResetCommandPool) X(vkAllocateCommandBuffers) X(vkBeginCommandBuffer) X(vkEndCommandBuffer) \
   X(vkCreateFence) X(vkWaitForFences) X(vkResetFences) X(vkCreateSemaphore) X(vkQueueSubmit) X(vkDeviceWaitIdle) \
   X(vkCmdPipelineBarrier) X(vkCmdCopyBufferToImage) X(vkCmdCopyImage) X(vkCmdCopyImageToBuffer) X(vkCmdBlitImage) X(vkCmdClearAttachments) X(vkCmdBindPipeline) X(vkCmdBindDescriptorSets) X(vkCmdBindVertexBuffers) \
-  X(vkCmdBindIndexBuffer) X(vkCmdDrawIndexed) X(vkCmdSetViewport) X(vkCmdSetScissor) X(vkCmdSetBlendConstants) X(vkCmdBeginRendering) X(vkCmdEndRendering) \
+  X(vkCmdBindIndexBuffer) X(vkCmdDrawIndexed) X(vkCmdDraw) X(vkCmdSetViewport) X(vkCmdSetScissor) X(vkCmdSetBlendConstants) X(vkCmdBeginRendering) X(vkCmdEndRendering) \
   X(vkCmdClearColorImage) X(vkCmdClearDepthStencilImage)
 
 #define DECL(n) static PFN_##n n;
@@ -393,6 +393,21 @@ bool GpuVkReady() {
 
 bool GpuVkActive() { return g_ok; }
 
+// A clear that names only some colour channels (the title clears just alpha mid-frame): vkCmdClearAttachments cannot mask channels, so draw a full-screen triangle of constant colour with a colour write mask
+static void ClearColourChannels(RenderTarget* rt, uint32_t cm, uint32_t colorValue, int x0, int y0, int x1, int y1) {
+  static Shader vs; static std::map<uint32_t, Shader> fsMap;
+  if (!vs.mod) vs.mod = MakeModule(GenClearVertexShader());
+  Shader& fs = fsMap[colorValue]; if (!fs.mod) fs.mod = MakeModule(GenClearFragmentShader(((colorValue >> 16) & 255) / 255.f, ((colorValue >> 8) & 255) / 255.f, (colorValue & 255) / 255.f, (colorValue >> 24) / 255.f));
+  PipeKey pk{}; pk.vs = 0xC1EA4; pk.fs = 0xC1EA4000000ull | colorValue; pk.usedMask = 0; pk.depthFunc = 0x207;
+  pk.colorMask = ((cm & 0x10) ? 0x00010000u : 0u) | ((cm & 0x20) ? 0x100u : 0u) | ((cm & 0x40) ? 1u : 0u) | ((cm & 0x80) ? 0x01000000u : 0u);
+  VkPipeline pipe = GetPipeline(pk, vs, fs); VkCommandBuffer cb = F().cb;
+  vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
+  VkViewport vpt{0.f, 0.f, (float)rt->w, (float)rt->h, 0.f, 1.f}; vkCmdSetViewport(cb, 0, 1, &vpt);
+  VkRect2D sc{{std::max(0, x0), std::max(0, y0)}, {(uint32_t)std::max(1, x1 - x0 + 1), (uint32_t)std::max(1, y1 - y0 + 1)}}; vkCmdSetScissor(cb, 0, 1, &sc);
+  float bc[4] = {0, 0, 0, 0}; vkCmdSetBlendConstants(cb, bc);
+  vkCmdDraw(cb, 3, 1, 0, 0);
+}
+
 void GpuClear(uint32_t mask, uint32_t colorValue, uint32_t zValue, int x0, int y0, int x1, int y1) {
   if (!GpuVkReady()) return;
   { static std::set<uint32_t> seen; if (seen.insert(mask).second) Log("[vk] clear mask 0x%x first seen (colour 0x%08x z 0x%x rect (%d,%d)-(%d,%d))", mask, colorValue, zValue, x0, y0, x1, y1); }
@@ -401,7 +416,9 @@ void GpuClear(uint32_t mask, uint32_t colorValue, uint32_t zValue, int x0, int y
   { static const char* fl = getenv("XBOX_FRAMELOG2"); if (fl && g_dbgFlips >= atoi(fl) && g_dbgFlips < atoi(fl) + 2) Log("[frame2] flip %d draw#%d CLEAR mask=0x%x colour=0x%08x z=0x%x rect=(%d,%d)-(%d,%d) -> RT off=0x%x %dx%d (surface clip %d,%d %dx%d)", g_dbgFlips, g_frameDraws, mask, colorValue, zValue, x0, y0, x1, y1, rt->offset, rt->w, rt->h, sx, sy, sw, sh); }
   if (g_drawLogFlip == g_dbgFlips || (g_darkArm >= 0 && (g_dbgFlips == g_darkArm || g_dbgFlips == g_darkArm + 1)) || (g_dbgFlips > 0 && g_dbgFlips % 2400 < 2)) Log("[drawlog] flip %d clear before draw %d mask=0x%x colour=0x%08x z=0x%x rect=(%d,%d)-(%d,%d) rt=%dx%d@%x zeta=%x", g_dbgFlips, g_frameDraws, mask, colorValue, zValue, x0, y0, x1, y1, rt->w, rt->h, rt->offset, R(0x214));
   VkClearAttachment ca[2]; int n = 0;
-  // A clear that names only some colour channels (the title clears just alpha mid-frame) must not touch the others; vkCmdClearAttachments cannot mask channels, so such a clear is skipped (alpha-only clears are approximated by leaving alpha as drawn)
+  static const bool clrTest = getenv("XBOX_CLEARTEST") != nullptr;   // debug: route every colour clear through the masked-draw path
+  if (clrTest && (mask & 0xF0)) { ClearColourChannels(rt, mask & 0xF0, colorValue, x0, y0, x1, y1); mask &= ~0xF0u; } else
+  if ((mask & 0xF0) && (mask & 0x70) != 0x70) ClearColourChannels(rt, mask & 0xF0, colorValue, x0, y0, x1, y1);   // partial channels: masked draw instead
   if ((mask & 0x70) == 0x70) { ca[n].aspectMask = VK_IMAGE_ASPECT_COLOR_BIT; ca[n].colorAttachment = 0; ca[n].clearValue.color = {{((colorValue >> 16) & 255) / 255.f, ((colorValue >> 8) & 255) / 255.f, (colorValue & 255) / 255.f, (colorValue >> 24) / 255.f}}; n++; }
   if (mask & 0x3) { uint32_t zfmt = (R(0x208) >> 4) & 0xF; float d = zfmt == 1 ? (zValue & 0xFFFF) / 65535.f : (zValue >> 8) / 16777215.f; ca[n].aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT; ca[n].clearValue.depthStencil = {d, 0}; n++; }
   if (!n) return;
