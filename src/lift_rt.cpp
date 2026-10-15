@@ -152,6 +152,14 @@ typedef uint32_t(PLAT_STDCALL* S6)(UA, UA, UA, UA, UA, UA); typedef uint32_t(PLA
 typedef uint32_t(PLAT_STDCALL* S8)(UA, UA, UA, UA, UA, UA, UA, UA);
 typedef uint32_t(PLAT_STDCALL* S9)(UA, UA, UA, UA, UA, UA, UA, UA, UA);
 typedef uint32_t(PLAT_STDCALL* S10)(UA, UA, UA, UA, UA, UA, UA, UA, UA, UA);
+#if defined(__APPLE__) && defined(__aarch64__)
+// Apple's arm64 ABI packs stack arguments (the 9th onward) by their natural size, unlike AAPCS64 elsewhere, so the callee's real parameter types matter there:
+// a pointer takes 8 bytes and a 32-bit integer 4. The bridge picks the signature from the pointer mask for those arguments.
+#define K8(n) typedef uint32_t(PLAT_STDCALL* S9_##n)(UA, UA, UA, UA, UA, UA, UA, UA, n);
+K8(UA) K8(uint32_t)
+#define K10(x, y) typedef uint32_t(PLAT_STDCALL* S10_##x##_##y)(UA, UA, UA, UA, UA, UA, UA, UA, x, y);
+K10(UA, UA) K10(UA, uint32_t) K10(uint32_t, UA) K10(uint32_t, uint32_t)
+#endif
 typedef uint32_t(PLAT_FASTCALL* F1)(UA); typedef uint32_t(PLAT_FASTCALL* F2)(UA, UA); typedef uint32_t(PLAT_FASTCALL* F3)(UA, UA, UA);
 typedef uint64_t(PLAT_STDCALL* Q0)();
 // printf-style formatting of a guest call: `ga` points at the guest stack arguments (format string address first, then the variadic values; 32-bit slots, doubles take two).
@@ -194,8 +202,20 @@ static void KBridge(LiftCpu* c, const KernelImport* k) {
       case 0: r = ((S0)k->fn)(); break; case 1: r = ((S1)k->fn)(a[0]); break; case 2: r = ((S2)k->fn)(a[0], a[1]); break; case 3: r = ((S3)k->fn)(a[0], a[1], a[2]); break;
       case 4: r = ((S4)k->fn)(a[0], a[1], a[2], a[3]); break; case 5: r = ((S5)k->fn)(a[0], a[1], a[2], a[3], a[4]); break;
       case 6: r = ((S6)k->fn)(a[0], a[1], a[2], a[3], a[4], a[5]); break; case 7: r = ((S7)k->fn)(a[0], a[1], a[2], a[3], a[4], a[5], a[6]); break;
-      case 8: r = ((S8)k->fn)(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]); break; case 9: r = ((S9)k->fn)(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8]); break;
+      case 8: r = ((S8)k->fn)(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]); break;
+#if defined(__APPLE__) && defined(__aarch64__)
+      case 9: if (k->ptrMask & 0x100) r = ((S9_UA)k->fn)(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8]); else r = ((S9_uint32_t)k->fn)(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], (uint32_t)a[8]); break;
+      case 10: {
+        const bool p8 = (k->ptrMask & 0x100) != 0, p9 = (k->ptrMask & 0x200) != 0;
+        if (p8 && p9) r = ((S10_UA_UA)k->fn)(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8], a[9]);
+        else if (p8) r = ((S10_UA_uint32_t)k->fn)(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8], (uint32_t)a[9]);
+        else if (p9) r = ((S10_uint32_t_UA)k->fn)(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], (uint32_t)a[8], a[9]);
+        else r = ((S10_uint32_t_uint32_t)k->fn)(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], (uint32_t)a[8], (uint32_t)a[9]);
+        break; }
+#else
+      case 9: r = ((S9)k->fn)(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8]); break;
       case 10: r = ((S10)k->fn)(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8], a[9]); break;
+#endif
       default: Log("[lift] import %s with %d args", k->name, n);
     }
   }
