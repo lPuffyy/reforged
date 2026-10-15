@@ -74,6 +74,7 @@ extern "C" void ReforgedSetMetalLayer(void* layer);
   NSString* docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
   [fm changeCurrentDirectoryPath:docs];
   // Debug switches: Documents/reforged.env, one KEY=VALUE per line (# starts a comment); each becomes an environment variable before the runtime starts.
+  int envCount = 0; NSString* envNote = nil;
   {
     NSString* envText = [NSString stringWithContentsOfFile:[docs stringByAppendingPathComponent:@"reforged.env"] encoding:NSUTF8StringEncoding error:nil];
     for (NSString* raw in [envText componentsSeparatedByCharactersInSet:[NSCharacterSet newlineCharacterSet]]) {
@@ -81,7 +82,9 @@ extern "C" void ReforgedSetMetalLayer(void* layer);
       if (!line.length || [line hasPrefix:@"#"]) continue;
       NSRange eq = [line rangeOfString:@"="]; if (eq.location == NSNotFound || eq.location == 0) continue;
       setenv([[line substringToIndex:eq.location] UTF8String], [[line substringFromIndex:eq.location + 1] UTF8String], 1);
+      envCount++;
     }
+    envNote = envText ? [NSString stringWithFormat:@"reforged.env found: %d setting(s) applied", envCount] : @"no reforged.env in the app folder";
   }
   NSString* bundle = [[NSBundle mainBundle] bundlePath];
   self.xbe = [bundle stringByAppendingPathComponent:@"title/default.xbe"];
@@ -95,6 +98,7 @@ extern "C" void ReforgedSetMetalLayer(void* layer);
     [self runWithIso:@"none" xbe:@"none" seconds:"2"];
     return YES;
   }
+  if (envNote) setenv("REFORGED_ENV_NOTE", [envNote UTF8String], 1);
   setenv("XBOX_TITLE_DIR", [[bundle stringByAppendingPathComponent:@"title"] UTF8String], 1);
   if (!haveModule) { self.label.text = @"Reforged\nthe game module is missing"; return YES; }
   setenv("XBOX_LIFT", "1", 1);

@@ -522,12 +522,13 @@ static bool FrameDumpDue(int flip) {
   for (const char* q = e; *q;) { if (atoi(q) == flip) return true; while (*q && *q != ',') ++q; if (*q == ',') ++q; }
   return false;
 }
-struct DumpReq { uint8_t* p; int w, h, n; };
+struct DumpReq { uint8_t* p; int w, h, n; bool file; };
 static void WriteDump(int flip, const DumpReq& d) {
   size_t px = (size_t)d.w * d.h; double sum[3] = {0, 0, 0};
   for (size_t i = 0; i < px; i += 3) { sum[0] += d.p[i * 4 + 2]; sum[1] += d.p[i * 4 + 1]; sum[2] += d.p[i * 4]; }   // image is BGRA
   double cnt = (double)(px / 3 + 1);
   Log("[dump] flip %d image %d %dx%d mean RGB = (%.1f %.1f %.1f)", flip, d.n, d.w, d.h, sum[0] / cnt, sum[1] / cnt, sum[2] / cnt);
+  if (!d.file) return;
   char name[96]; snprintf(name, sizeof name, "frame_%d_%d.bmp", flip, d.n);
   FILE* f = fopen(name, "wb"); if (!f) return;
   uint32_t fsz = 54 + (uint32_t)px * 4, z = 0, off = 54, hs = 40, pl = 1 | (32 << 16); int32_t w = d.w, h = d.h;
@@ -568,6 +569,11 @@ static void GpuFlipImpl() {
   const uint8_t* lumPtr = nullptr; int lumW = g_rt->w, lumH = g_rt->h; static bool lumOn = getenv("XBOX_LUMLOG") != nullptr;   // XBOX_LUMLOG=1: read the presented image back and log its mean brightness per flip (with the draw cap), for automated bisection
   if (lumOn) { uint8_t* dst; size_t off = RingAlloc((size_t)lumW * lumH * 4, 16, &dst); VkBufferImageCopy bc{}; bc.bufferOffset = off; bc.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}; bc.imageExtent = {(uint32_t)lumW, (uint32_t)lumH, 1}; vkCmdCopyImageToBuffer(cb, rtc.img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, fr.ring.b, 1, &bc); lumPtr = dst; }
   std::vector<DumpReq> dumpReqs;
+  if (!FrameDumpDue(g_dbgFlips) && g_dbgFlips > 0 && g_dbgFlips % 300 == 0 && g_dbgFlips <= 12000) {   // always on: the presented image's mean colour every 300 flips (a black screen shows up in the log)
+    uint8_t* dst; size_t off = RingAlloc((size_t)g_rt->w * g_rt->h * 4, 16, &dst);
+    VkBufferImageCopy bc{}; bc.bufferOffset = off; bc.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}; bc.imageExtent = {(uint32_t)g_rt->w, (uint32_t)g_rt->h, 1};
+    vkCmdCopyImageToBuffer(cb, rtc.img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, fr.ring.b, 1, &bc); dumpReqs.push_back({dst, g_rt->w, g_rt->h, 0, false});
+  }
   if (FrameDumpDue(g_dbgFlips)) {
     auto grab = [&](Img& im, int w, int h, int n, bool inTransferSrc) {
       if (im.layout == VK_IMAGE_LAYOUT_UNDEFINED) return;
@@ -577,7 +583,7 @@ static void GpuFlipImpl() {
       VkBufferImageCopy bc{}; bc.bufferOffset = off; bc.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}; bc.imageExtent = {(uint32_t)w, (uint32_t)h, 1};
       vkCmdCopyImageToBuffer(cb, im.img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, fr.ring.b, 1, &bc);
       if (!inTransferSrc) Barrier(cb, im, orig, VK_IMAGE_ASPECT_COLOR_BIT, VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
-      dumpReqs.push_back({dst, w, h, n});
+      dumpReqs.push_back({dst, w, h, n, true});
     };
     grab(rtc, g_rt->w, g_rt->h, 0, true);
     std::vector<RenderTarget*> others; for (auto* r : g_rts) if (r != g_rt && r->lastWrite && r->color.img && r->w * r->h <= 1280 * 960) others.push_back(r);

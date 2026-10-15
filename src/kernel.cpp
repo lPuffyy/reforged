@@ -721,6 +721,7 @@ void KernelInit() {
   if (getenv("XBOX_CRYPTO_TEST")) DesSelfTest();
   for (const char* d : {"work", "work/title", "work/title/hdd", "work/title/hdd/Partition1", "work/title/hdd/Partition1/TDATA", "work/title/hdd/Partition1/UDATA", "work/title/hdd/Partition2", "work/title/hdd/Partition3", "work/title/hdd/Partition4", "work/title/hdd/Partition5"}) plat::MakeDir(d);
   g_log = fopen("reforged.log", "w");
+  if (const char* note = getenv("REFORGED_ENV_NOTE")) Log("[env] %s", note);
   // Physical RAM is a file mapping so the GPU's instance-memory window (PRAMIN, top 1 MB) can alias it at 0xFD700000.
   g_ramMap = plat::ShmCreate(g_contigSize);
   GuestMemInit();
