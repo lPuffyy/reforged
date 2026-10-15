@@ -534,3 +534,41 @@ bool SoftDecodeTexture(int stage, std::vector<uint32_t>* bgra, int* w, int* h, u
   for (int y = 0; y < t.h; y++) for (int x = 0; x < t.w; x++) (*bgra)[(size_t)y * t.w + x] = TexelARGB(t, x, y);
   return true;
 }
+
+// ---------------- cube maps ----------------
+bool SoftTextureIsCube(int stage) {
+  uint32_t base = 0x1B00 + 64 * stage, fmt = R(base + 4), ctl0 = R(base + 0xC);
+  return (ctl0 & 0x40000000u) && ((fmt >> 2) & 1) && ((fmt >> 4) & 15) == 2;
+}
+static size_t CubeFaceBytes(int fmtCode, int size, int levels) {   // one face: its whole mip chain, each level at least one texel (one block when compressed)
+  size_t total = 0;
+  for (int l = 0; l < levels; l++) {
+    int d = std::max(1, size >> l);
+    switch (fmtCode) {
+      case 0x0C: { int b = std::max(1, (d + 3) / 4); total += (size_t)b * b * 8; break; }
+      case 0x0E: case 0x0F: { int b = std::max(1, (d + 3) / 4); total += (size_t)b * b * 16; break; }
+      case 0x06: case 0x07: total += (size_t)d * d * 4; break;
+      case 0x00: case 0x01: case 0x0B: case 0x19: total += (size_t)d * d; break;
+      default: total += (size_t)d * d * 2; break;
+    }
+  }
+  return total;
+}
+bool SoftDecodeCube(int stage, std::vector<uint32_t>* faces, int* size, uint64_t* hash) {
+  Tex t = GetTexture(stage); if (!t.valid || t.linear || t.w <= 0 || t.w != t.h || t.w > 2048) return false;
+  uint32_t fmtReg = R(0x1B04 + 64 * stage); int levels = std::max(1u, (fmtReg >> 16) & 15);
+  static const size_t align = getenv("XBOX_CUBE_ALIGN") ? (size_t)atoi(getenv("XBOX_CUBE_ALIGN")) : 128;
+  size_t stride = CubeFaceBytes(t.fmt, t.w, levels); stride = (stride + align - 1) / align * align;
+  *size = t.w;
+  uint64_t hh = 1469598103934665603ull ^ (uint64_t)t.fmt ^ ((uint64_t)stride << 8) ^ 0xC0BEC0BEull; const uint64_t* p = (const uint64_t*)t.data;
+  for (size_t i = 0; i < stride * 6 / 8; i++) { hh ^= p[i]; hh *= 1099511628211ull; hh ^= hh >> 29; }
+  *hash = hh;
+  if (!faces) return true;
+  faces->resize((size_t)t.w * t.w * 6);
+  for (int f = 0; f < 6; f++) {
+    Tex ft = t; ft.data = t.data + stride * f; ft.swizzled = !(t.fmt >= 0x0C && t.fmt <= 0x0F);
+    for (int y = 0; y < t.w; y++) for (int x = 0; x < t.w; x++) (*faces)[((size_t)f * t.w + y) * t.w + x] = TexelARGB(ft, x, y);
+  }
+  if (getenv("XBOX_CUBEDUMP")) { static int nd = 0; if (nd < 12) { for (int f = 0; f < 6; f++) { char path[120]; snprintf(path, sizeof path, "cube_%d_face%d.bmp", nd, f); DumpBmp(path, faces->data() + (size_t)f * t.w * t.w, t.w, t.w); } Log("[tex] cube %d: format 0x%02x, %dx%d faces, %d level(s), face stride %zu -> cube_%d_face*.bmp", nd, t.fmt, t.w, t.w, levels, stride, nd); ++nd; } }
+  return true;
+}

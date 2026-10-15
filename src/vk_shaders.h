@@ -18,6 +18,7 @@ std::vector<uint32_t> GenFixedVertexShader(const FfState& st, uint32_t* usedInpu
 struct FsInfo {
   uint32_t numStages = 0; bool uniqueC0 = false, uniqueC1 = false, muxMsb = false;
   uint32_t icwC[8] = {}, icwA[8] = {}, ocwC[8] = {}, ocwA[8] = {}, final0 = 0, final1 = 0;
+  bool texCube[4] = {};   // the stage's texture is a cube map: sampled with the stage's (s,t,r) texture coordinate as a direction
   bool texPresent[4] = {}, texLinear[4] = {}, texDepth[4] = {};   // texDepth: the stage samples a depth buffer (Z24S8 seen as ARGB8: A = z[23:16], R = z[15:8], G = z[7:0], B = stencil)
    uint32_t texMode[4] = {};   // texMode: 0 none, 1 project 2D, 4 passthrough (others sampled as 2D)
   bool alphaTest = false; uint32_t alphaFunc = 0x207;

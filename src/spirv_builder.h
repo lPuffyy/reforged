@@ -57,6 +57,8 @@ struct Spv {
   uint32_t TStruct(const std::vector<uint32_t>& members) { uint32_t id = Id(); std::vector<uint32_t> w{id}; w.insert(w.end(), members.begin(), members.end()); PutVec(types, OpTypeStruct, w); return id; }
   uint32_t TFunc(uint32_t ret) { auto k = std::make_tuple(7, ret, 0u); auto it = typeCache.find(k); if (it != typeCache.end()) return it->second; uint32_t id = Id(); Put(types, OpTypeFunction, {id, ret}); typeCache[k] = id; return id; }
   uint32_t TImage2D() { auto k = std::make_tuple(8, 0u, 0u); auto it = typeCache.find(k); if (it != typeCache.end()) return it->second; uint32_t f = TFloat(), id = Id(); Put(types, OpTypeImage, {id, f, 1 /*2D*/, 0, 0, 0, 1 /*sampled*/, 0 /*unknown*/}); typeCache[k] = id; return id; }
+  uint32_t TImageCube() { auto k = std::make_tuple(10, 0u, 0u); auto it = typeCache.find(k); if (it != typeCache.end()) return it->second; uint32_t f = TFloat(), id = Id(); Put(types, OpTypeImage, {id, f, 3 /*Cube*/, 0, 0, 0, 1 /*sampled*/, 0 /*unknown*/}); typeCache[k] = id; return id; }
+  uint32_t TSampledCube() { auto k = std::make_tuple(11, 0u, 0u); auto it = typeCache.find(k); if (it != typeCache.end()) return it->second; uint32_t im = TImageCube(), id = Id(); Put(types, OpTypeSampledImage, {id, im}); typeCache[k] = id; return id; }
   uint32_t TSampled2D() { auto k = std::make_tuple(9, 0u, 0u); auto it = typeCache.find(k); if (it != typeCache.end()) return it->second; uint32_t im = TImage2D(), id = Id(); Put(types, OpTypeSampledImage, {id, im}); typeCache[k] = id; return id; }
   uint32_t TVec4() { return TVec(TFloat(), 4); }
 

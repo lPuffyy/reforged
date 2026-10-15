@@ -159,9 +159,9 @@ std::vector<uint32_t> GenFragmentShader(const FsInfo& f) {
   uint32_t ub = s.TStruct({arr8, arr8, tV4, tV4, tV4, arr4, tV4}); s.Decorate(ub, Spv::D_Block);
   uint32_t offs[7] = {0, 128, 256, 272, 288, 304, 368}; for (int i = 0; i < 7; i++) s.MemberDecorate(ub, i, Spv::D_Offset, {offs[i]});
   uint32_t ubVar = s.Variable(ub, Spv::Uniform); s.Decorate(ubVar, Spv::D_DescriptorSet, {0}); s.Decorate(ubVar, Spv::D_Binding, {5});
-  uint32_t tSamp = s.TSampled2D(); uint32_t sampVar[4] = {};
+  uint32_t tSamp = s.TSampled2D(), tSampCube = s.TSampledCube(); uint32_t sampVar[4] = {};
   std::vector<uint32_t> iface;
-  for (int i = 0; i < 4; i++) { sampVar[i] = s.Variable(tSamp, Spv::UniformConstant); s.Decorate(sampVar[i], Spv::D_DescriptorSet, {0}); s.Decorate(sampVar[i], Spv::D_Binding, {(uint32_t)(1 + i)}); }
+  for (int i = 0; i < 4; i++) { sampVar[i] = s.Variable(f.texCube[i] ? tSampCube : tSamp, Spv::UniformConstant); s.Decorate(sampVar[i], Spv::D_DescriptorSet, {0}); s.Decorate(sampVar[i], Spv::D_Binding, {(uint32_t)(1 + i)}); }
   uint32_t inD0 = s.Variable(tV4, Spv::Input), inD1 = s.Variable(tV4, Spv::Input), inT[4], inFog = s.Variable(tV4, Spv::Input);
   s.Decorate(inD0, Spv::D_Location, {0}); s.Decorate(inD1, Spv::D_Location, {1});
   for (int i = 0; i < 4; i++) { inT[i] = s.Variable(tV4, Spv::Input); s.Decorate(inT[i], Spv::D_Location, {(uint32_t)(2 + i)}); iface.push_back(inT[i]); }
@@ -185,8 +185,9 @@ std::vector<uint32_t> GenFragmentShader(const FsInfo& f) {
     uint32_t uv = s.Shuffle(s.TVec(tF, 2), tc, tc, {0, 1});
     if (f.texMode[i] == 1) { uint32_t q = comp(tc, 3); uint32_t qz = s.Emit(Spv::OpFOrdEqual, tBool, {q, zero}); q = s.Emit(Spv::OpSelect, tF, {qz, one, q}); uint32_t qv = s.Emit(Spv::OpCompositeConstruct, s.TVec(tF, 2), {q, q}); uv = s.Emit(Spv::OpFDiv, s.TVec(tF, 2), {uv, qv}); }
     if (f.texLinear[i]) { uint32_t sz = uniformVec(5, (uint32_t)i); uint32_t sz2 = s.Shuffle(s.TVec(tF, 2), sz, sz, {0, 1}); uv = s.Emit(Spv::OpFDiv, s.TVec(tF, 2), {uv, sz2}); }
-    uint32_t img = s.Load(tSamp, sampVar[i]);
-    uint32_t smp = s.Emit(Spv::OpImageSampleImplicitLod, tV4, {img, uv});
+    uint32_t smp;
+    if (f.texCube[i]) { uint32_t dir = s.Shuffle(tV3, tc, tc, {0, 1, 2}); uint32_t imgc = s.Load(tSampCube, sampVar[i]); smp = s.Emit(Spv::OpImageSampleImplicitLod, tV4, {imgc, dir}); }   // cube map: (s,t,r) is the lookup direction
+    else { uint32_t img = s.Load(tSamp, sampVar[i]); smp = s.Emit(Spv::OpImageSampleImplicitLod, tV4, {img, uv}); }
     if (f.texDepth[i]) {   // depth image sample .x in [0,1] -> 24-bit integer -> Xbox Z24S8-as-ARGB8 byte channels
       uint32_t d = comp(smp, 0), k24 = s.CFloat(16777215.f), k65536 = s.CFloat(65536.f), k256 = s.CFloat(256.f), k255 = s.CFloat(255.f);
       uint32_t z = s.Glsl1(tF, Spv::G_Floor, s.Emit(Spv::OpFAdd, tF, {s.Emit(Spv::OpFMul, tF, {d, k24}), half}));

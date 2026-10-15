@@ -86,13 +86,14 @@ Buf MakeBuf(size_t size, VkBufferUsageFlags usage, bool hostVisible) {
   if (hostVisible) CHK(vkMapMemory(g_dev, b.m, 0, VK_WHOLE_SIZE, 0, (void**)&b.map));
   return b;
 }
-Img MakeImg(int w, int h, VkFormat fmt, VkImageUsageFlags usage, VkImageAspectFlags aspect) {
+Img MakeImg(int w, int h, VkFormat fmt, VkImageUsageFlags usage, VkImageAspectFlags aspect, bool cube = false) {
   Img im; im.w = w; im.h = h; im.fmt = fmt; VkImageCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO}; ci.imageType = VK_IMAGE_TYPE_2D; ci.format = fmt; ci.extent = {(uint32_t)w, (uint32_t)h, 1};
-  ci.mipLevels = 1; ci.arrayLayers = 1; ci.samples = VK_SAMPLE_COUNT_1_BIT; ci.tiling = VK_IMAGE_TILING_OPTIMAL; ci.usage = usage; ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE; ci.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+  if (cube) ci.flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
+  ci.mipLevels = 1; ci.arrayLayers = cube ? 6 : 1; ci.samples = VK_SAMPLE_COUNT_1_BIT; ci.tiling = VK_IMAGE_TILING_OPTIMAL; ci.usage = usage; ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE; ci.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
   CHK(vkCreateImage(g_dev, &ci, nullptr, &im.img)); VkMemoryRequirements mr; vkGetImageMemoryRequirements(g_dev, im.img, &mr);
   VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO}; ai.allocationSize = mr.size; ai.memoryTypeIndex = FindMem(mr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
   CHK(vkAllocateMemory(g_dev, &ai, nullptr, &im.mem)); CHK(vkBindImageMemory(g_dev, im.img, im.mem, 0));
-  VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO}; vi.image = im.img; vi.viewType = VK_IMAGE_VIEW_TYPE_2D; vi.format = fmt; vi.subresourceRange = {aspect, 0, 1, 0, 1};
+  VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO}; vi.image = im.img; vi.viewType = cube ? VK_IMAGE_VIEW_TYPE_CUBE : VK_IMAGE_VIEW_TYPE_2D; vi.format = fmt; vi.subresourceRange = {aspect, 0, 1, 0, cube ? 6u : 1u};
   CHK(vkCreateImageView(g_dev, &vi, nullptr, &im.view)); return im;
 }
 void Defer(std::function<void()> fn) { g_frames[g_fi].deferred.push_back(std::move(fn)); }
@@ -202,6 +203,28 @@ void EndRendering() { if (g_rendering) { vkCmdEndRendering(F().cb); g_rendering 
 struct TexEntry { Img img; uint64_t hash = 0; uint64_t lastUsed = 0; bool linear = false; };
 std::map<std::pair<uint64_t, uint32_t>, TexEntry> g_texCache;   // (content hash, size) -> image
 
+// Cube map: six BGRA8 faces (level 0), one 6-layer image with a cube view.
+bool UploadCubeTexture(int stage, TexEntry** out) {
+  int size = 0; uint64_t hash = 0;
+  if (!SoftDecodeCube(stage, nullptr, &size, &hash)) return false;
+  auto key = std::make_pair(hash, (uint32_t)(size << 16 | 0xCB));
+  auto it = g_texCache.find(key);
+  if (it != g_texCache.end()) { it->second.lastUsed = g_frameNo; *out = &it->second; return true; }
+  std::vector<uint32_t> faces; if (!SoftDecodeCube(stage, &faces, &size, &hash)) return false;
+  EndRendering();
+  TexEntry e; e.img = MakeImg(size, size, VK_FORMAT_B8G8R8A8_UNORM, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_IMAGE_ASPECT_COLOR_BIT, true); e.hash = hash; e.lastUsed = g_frameNo; e.linear = false;
+  size_t faceBytes = (size_t)size * size * 4; uint8_t* dst; size_t off = RingAlloc(faceBytes * 6, 16, &dst); memcpy(dst, faces.data(), faceBytes * 6);
+  VkCommandBuffer cb = F().cb;
+  VkImageMemoryBarrier b0{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER}; b0.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED; b0.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL; b0.srcQueueFamilyIndex = b0.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  b0.image = e.img.img; b0.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 6}; b0.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+  vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b0);
+  VkBufferImageCopy bc[6]; for (int f = 0; f < 6; f++) { bc[f] = {}; bc[f].bufferOffset = off + faceBytes * f; bc[f].imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, (uint32_t)f, 1}; bc[f].imageExtent = {(uint32_t)size, (uint32_t)size, 1}; }
+  vkCmdCopyBufferToImage(cb, F().ring.b, e.img.img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 6, bc);
+  VkImageMemoryBarrier b1 = b0; b1.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL; b1.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL; b1.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT; b1.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+  vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b1); e.img.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+  auto res = g_texCache.emplace(key, e); *out = &res.first->second;
+  return true;
+}
 bool UploadTexture(int stage, TexEntry** out) {
   std::vector<uint32_t> bgra; int w, h; uint64_t hash; bool linear;
   static std::vector<uint32_t> scratch;
@@ -427,6 +450,7 @@ static void GpuDrawImpl(uint32_t prim, const SoftVertex* verts, size_t n) {
   TexEntry* tex[4] = {}; RenderTarget* rtTex[4] = {}, *rtDepth[4] = {}; Img* depthSnap[4] = {}; bool selfSnap[4] = {}; Img* colorSnap[4] = {};
   for (int t = 0; t < 4; t++) {
     uint32_t mode = (R(0x1E70) >> (5 * t)) & 0x1F; fi.texMode[t] = mode;
+    if (mode != 0 && SoftTextureIsCube(t)) { fi.texPresent[t] = true; fi.texCube[t] = true; if (!UploadCubeTexture(t, &tex[t])) tex[t] = nullptr; continue; }   // cube map: its own image type and sampler
     if (mode != 0) {
       RenderTarget* src = FindRTByOffset(R(0x1B00 + 64 * t), rt);
       uint64_t dk; int dw, dh; bool dl;
@@ -482,9 +506,15 @@ static void GpuDrawImpl(uint32_t prim, const SoftVertex* verts, size_t n) {
     Barrier(fr.cb, dummy, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, 0, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
     VkClearColorValue cv{{0, 0, 0, 0}}; VkImageSubresourceRange rg{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}; vkCmdClearColorImage(fr.cb, dummy.img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &cv, 1, &rg);
     Barrier(fr.cb, dummy, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT); }
+  static Img dummyCube; if (!dummyCube.img) { EndRendering(); dummyCube = MakeImg(1, 1, VK_FORMAT_B8G8R8A8_UNORM, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_IMAGE_ASPECT_COLOR_BIT, true);
+    VkImageMemoryBarrier cb0{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER}; cb0.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED; cb0.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL; cb0.srcQueueFamilyIndex = cb0.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED; cb0.image = dummyCube.img; cb0.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 6}; cb0.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    vkCmdPipelineBarrier(fr.cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &cb0);
+    VkClearColorValue cv{{0, 0, 0, 0}}; VkImageSubresourceRange rg{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 6}; vkCmdClearColorImage(fr.cb, dummyCube.img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &cv, 1, &rg);
+    VkImageMemoryBarrier cb1 = cb0; cb1.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL; cb1.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL; cb1.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT; cb1.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(fr.cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &cb1); }
   for (int t = 0; t < 4; t++) {
     uint32_t base = 0x1B00 + 64 * t, filt = R(base + 0x14), addr = R(base + 8); int mag = ((filt >> 24) & 0xF) == 2, au = (addr & 7) >= 3, av = ((addr >> 8) & 7) >= 3;
-    ii[t].sampler = g_samplers[mag][au][av]; ii[t].imageView = tex[t] ? tex[t]->img.view : colorSnap[t] ? colorSnap[t]->view : rtTex[t] ? rtTex[t]->color.view : depthSnap[t] ? depthSnap[t]->view : dummy.view; ii[t].imageLayout = depthSnap[t] ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    ii[t].sampler = g_samplers[mag][au][av]; ii[t].imageView = fi.texCube[t] ? (tex[t] ? tex[t]->img.view : dummyCube.view) : tex[t] ? tex[t]->img.view : colorSnap[t] ? colorSnap[t]->view : rtTex[t] ? rtTex[t]->color.view : depthSnap[t] ? depthSnap[t]->view : dummy.view; ii[t].imageLayout = depthSnap[t] ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET}; w.dstSet = ds; w.dstBinding = 1 + t; w.descriptorCount = 1; w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; w.pImageInfo = &ii[t]; ws.push_back(w);
   }
   vkUpdateDescriptorSets(g_dev, (uint32_t)ws.size(), ws.data(), 0, nullptr);
