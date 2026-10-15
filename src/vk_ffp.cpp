@@ -69,6 +69,7 @@ std::vector<uint32_t> GenFixedVertexShader(const FfState& st, uint32_t* usedInpu
   uint32_t iw = fdiv(one, pw);
   uint32_t px = fmul(comp(r, 0), iw), py = fmul(comp(r, 1), iw), pz = fmul(comp(r, 2), iw);
   uint32_t cx = fdiv(fsub(fmul(two, px), W), W), cy = fdiv(fsub(fmul(two, py), H), H), cz = fdiv(pz, ZM);
+  { static const bool margin = getenv("XBOX_NO_ZMARGIN") == nullptr; if (margin) cz = fadd(fmul(cz, s.CFloat(0.99998f)), s.CFloat(0.00001f)); }   // depth strictly inside the clip volume (see vk_shaders.cpp)
   s.Store(s.Emit(Spv::OpAccessChain, s.TPtr(Spv::Output, tV4), {posOut, s.CInt(0)}), s.Vec4(fmul(cx, pw), fmul(cy, pw), fmul(cz, pw), pw));
   // ---- texture coordinates: texgen + texture matrix ----
   bool needRefl = false; for (int i = 0; i < 4; i++) for (int j = 0; j < 4; j++) if (st.texgen[i][j] == 0x2402 || st.texgen[i][j] == 0x8512) needRefl = true;

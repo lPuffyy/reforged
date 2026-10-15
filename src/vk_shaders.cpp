@@ -137,6 +137,8 @@ std::vector<uint32_t> GenVertexShader(const uint32_t* prog, uint32_t start, uint
   uint32_t cx = s.Emit(Spv::OpFDiv, tF, {s.Emit(Spv::OpFSub, tF, {s.Emit(Spv::OpFMul, tF, {two, px}), W}), W});
   uint32_t cy = s.Emit(Spv::OpFDiv, tF, {s.Emit(Spv::OpFSub, tF, {s.Emit(Spv::OpFMul, tF, {two, py}), H}), H});
   uint32_t cz = s.Emit(Spv::OpFDiv, tF, {pz, ZM});
+  { static const bool margin = getenv("XBOX_NO_ZMARGIN") == nullptr;   // keep depth strictly inside the clip volume: screen-space draws sit exactly at z = 0 / zmax and a GPU that clips on the boundary would drop them
+    if (margin) cz = s.Emit(Spv::OpFAdd, tF, {s.Emit(Spv::OpFMul, tF, {cz, s.CFloat(0.99998f)}), s.CFloat(0.00001f)}); }
   uint32_t clip = s.Vec4(s.Emit(Spv::OpFMul, tF, {cx, pw}), s.Emit(Spv::OpFMul, tF, {cy, pw}), s.Emit(Spv::OpFMul, tF, {cz, pw}), pw);
   uint32_t ptrOutV4 = s.TPtr(Spv::Output, tV4);
   s.Store(s.Emit(Spv::OpAccessChain, ptrOutV4, {posOut, s.CInt(0)}), clip);

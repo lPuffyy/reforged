@@ -530,8 +530,10 @@ static void GpuDrawImpl(uint32_t prim, const SoftVertex* verts, size_t n) {
     if (logNow) { g_drawLogFlip = g_dbgFlips;
       char tx[256]; tx[0] = 0; size_t tp = 0;
       for (int t = 0; t < 4; t++) if (fi.texPresent[t] && tp < 200) tp += snprintf(tx + tp, sizeof tx - tp, " t%d:f%02x%s%dx%d", t, (R(0x1B04 + 64 * t) >> 8) & 0xFF, fi.texCube[t] ? "C" : (rtTex[t] || selfSnap[t] ? "R" : ""), tex[t] ? tex[t]->img.w : 0, tex[t] ? tex[t]->img.h : 0);
-      Log("[drawlog] flip %d draw %d rt=%dx%d@%x prim=%u n=%zu vs=%08x fs=%08x modes=%u,%u,%u,%u stages=%u blend=%u(%x,%x) depth=%u/%u%s", g_dbgFlips, g_frameDraws, rt->w, rt->h, rt->offset, prim, n, (unsigned)vhash, (unsigned)fhash,
-          fi.texMode[0], fi.texMode[1], fi.texMode[2], fi.texMode[3], fi.numStages, R(0x304) != 0, R(0x344), R(0x348), R(0x30C) != 0, R(0x35C) != 0, tx);
+      float bx0 = 0, by0 = 0, bx1 = 0, by1 = 0; bool hb = n <= 64 && SoftScreenBBox(verts, n, &bx0, &by0, &bx1, &by1);   // clip-space bounding box of small draws (HUD quads): compare machines
+      char bb[80]; bb[0] = 0; if (hb) snprintf(bb, sizeof bb, " bbox=(%.3f,%.3f)-(%.3f,%.3f) v0=(%.1f,%.1f,%.1f)", bx0, by0, bx1, by1, n ? verts[0].a[0][0] : 0.f, n ? verts[0].a[0][1] : 0.f, n ? verts[0].a[0][2] : 0.f);
+      Log("[drawlog] flip %d draw %d rt=%dx%d@%x prim=%u n=%zu vs=%08x fs=%08x modes=%u,%u,%u,%u stages=%u blend=%u(%x,%x) depth=%u/%u%s%s", g_dbgFlips, g_frameDraws, rt->w, rt->h, rt->offset, prim, n, (unsigned)vhash, (unsigned)fhash,
+          fi.texMode[0], fi.texMode[1], fi.texMode[2], fi.texMode[3], fi.numStages, R(0x304) != 0, R(0x344), R(0x348), R(0x30C) != 0, R(0x35C) != 0, tx, bb);
     }
   }
   PipeKey pk{}; pk.vs = vhash; pk.fs = fhash; pk.usedMask = used; pk.blendEnable = R(0x304) != 0; pk.sfac = R(0x344); pk.dfac = R(0x348); pk.eq = R(0x350); pk.depthTest = R(0x30C) != 0; pk.depthFunc = R(0x354); pk.depthMask = R(0x35C) != 0;
