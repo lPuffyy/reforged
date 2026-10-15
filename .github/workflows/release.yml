@@ -1,0 +1,76 @@
+name: release
+# Publishes the generic app: push a tag like v0.1.0. The IPA is built unsigned (the user's sideloading tool signs it), then signed with the project's release
+# key (Ed25519; secret RELEASE_SIGNING_KEY, a PEM private key) so the companion tool can check what it downloads. See docs/RELEASING.md.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  ipa:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Vulkan headers and sse2neon
+        run: |
+          git clone --depth 1 --branch v1.3.280 https://github.com/KhronosGroup/Vulkan-Headers.git "$RUNNER_TEMP/vk-headers"
+          git clone --depth 1 --branch v1.8.0 https://github.com/DLTcollab/sse2neon.git "$RUNNER_TEMP/sse2neon"
+      - name: Build the app
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          export SSE2NEON_DIR="$RUNNER_TEMP/sse2neon" VULKAN_HEADERS_DIR="$RUNNER_TEMP/vk-headers/include"
+          export VERSION="${VERSION#v}"
+          bash ios/build_ipa.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ipa
+          path: Reforged-unsigned.ipa
+
+  publish:
+    needs: ipa
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: ipa
+      - name: Sign
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: |
+          test -n "$RELEASE_SIGNING_KEY" || { echo "the RELEASE_SIGNING_KEY secret is not set (see docs/RELEASING.md)"; exit 1; }
+          name="Reforged-${GITHUB_REF_NAME}.ipa"
+          mv Reforged-unsigned.ipa "$name"
+          printf '%s\n' "$RELEASE_SIGNING_KEY" > "$RUNNER_TEMP/key.pem"
+          openssl pkeyutl -sign -rawin -inkey "$RUNNER_TEMP/key.pem" -in "$name" -out "$name.sig"
+          pub="$(openssl pkey -in "$RUNNER_TEMP/key.pem" -pubout -outform DER | tail -c 32 | xxd -p -c 64)"
+          rm -f "$RUNNER_TEMP/key.pem"
+          # check what we are about to publish with the same verifier the companion uses
+          PUB="$pub" NAME="$name" python -I - <<PYEOF
+          import os, sys
+          sys.path.insert(0, 'tools')
+          import ed25519
+          assert ed25519.verify(bytes.fromhex(os.environ['PUB']), open(os.environ['NAME'], 'rb').read(), open(os.environ['NAME'] + '.sig', 'rb').read())
+          print('signature verified with the companion verifier; public key', os.environ['PUB'])
+          PYEOF
+          sha256sum "$name" > "$name.sha256"
+          echo "IPA_NAME=$name" >> "$GITHUB_ENV"
+          echo "PUBLIC_KEY=$pub" >> "$GITHUB_ENV"
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" "$IPA_NAME" "$IPA_NAME.sig" "$IPA_NAME.sha256" \
+            --title "Reforged $GITHUB_REF_NAME" \
+            --notes "Generic app (contains no game code). Use the companion tool to build your personal copy from a disc you own; do not install this file on its own.
+
+          Signature: Ed25519, public key \`$PUBLIC_KEY\`. SHA-256 is in the .sha256 file."

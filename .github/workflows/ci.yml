@@ -175,3 +175,15 @@ jobs:
           path: Reforged-unsigned.ipa
           if-no-files-found: ignore
 
+  # The release signing process: OpenSSL signs, the companion's pure Python verifier checks.
+  release-signing:
+    needs: hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Signing interoperability
+        run: bash tests/sign_verify.sh
+

@@ -14,6 +14,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(REFORGED_LIFTED_DIR "" CACHE PATH "Directory with the locally generated translated code (optional)")
 set(VULKAN_HEADERS_DIR "" CACHE PATH "Vulkan-Headers 'include' directory (contains vulkan/vulkan.h)")
 set(SSE2NEON_DIR "" CACHE PATH "Directory containing sse2neon.h (required on arm64)")
+set(REFORGED_VERSION "0.1" CACHE STRING "Version string of the iOS app")
 
 set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)   # host tools (python) are found on the build machine even when cross compiling
 if(NOT IOS)
