@@ -137,6 +137,7 @@ def main():
     ap.add_argument('--xbsym-cli', default='', help='symbol scanner (XbSymbolDatabaseCLI)')
     ap.add_argument('--skip-symbols', action='store_true', help='do not scan for audio/controller entry points (test programs)')
     ap.add_argument('--no-disc', action='store_true', help='the program needs no disc at run time (test programs, homebrew)')
+    ap.add_argument('--title-data', default='', help='folder of per-title files (patches.txt, fs_patches.txt, ...) to add to the app; they replace generated files of the same name')
     ap.add_argument('--pubkey', default=RELEASE_PUBLIC_KEY, help='release signing public key (hex)')
     ap.add_argument('--work', default='', help='working directory (default: a temporary one)')
     ap.add_argument('--keep', action='store_true')
@@ -182,6 +183,11 @@ def main():
         if rc != 0: die('could not build the title data:\n' + out)
         print('  ' + out.strip().splitlines()[-1])
 
+    if a.title_data:
+        os.makedirs(title, exist_ok=True)
+        for f in sorted(os.listdir(a.title_data)):
+            src = os.path.join(a.title_data, f)
+            if os.path.isfile(src) and f.lower().endswith('.txt'): shutil.copyfile(src, os.path.join(title, f)); print('  title data: %s' % f)
     say(5, steps, 'translating the game code on this computer')
     rc, out = run_tool('lift_survey.py', [xbe_path], cwd=work)
     if rc != 0: die('survey failed:\n' + out[-2000:])
