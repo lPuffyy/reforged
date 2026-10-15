@@ -55,8 +55,8 @@ def draw():
     de = np.minimum(edge_dist(x, y, outer), edge_dist(x, y, hole))
     cover = np.where(m, 1.0, 0.0)
     # shadow and outer glow
-    halo = np.exp(-np.maximum(de, 0) / 0.05) * (~m)
-    img = img + halo[..., None] * np.array([1.0, 0.42, 0.10]) * 0.30
+    aura = np.exp(-np.maximum(de, 0) / 0.05) * (~m)
+    img = img + aura[..., None] * np.array([1.0, 0.42, 0.10]) * 0.30
     # steel body (bright at the top, dark below) heated to ember toward the bottom
     steel_t = np.clip((y - 0.19) / 0.62, 0, 1)
     steel = np.array([0.70, 0.75, 0.86]) * (1 - steel_t[..., None]) + np.array([0.30, 0.33, 0.42]) * steel_t[..., None]
