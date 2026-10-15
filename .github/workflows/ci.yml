@@ -107,6 +107,19 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -y -qq clang lld llvm
       - name: sse2neon
         run: git clone --depth 1 --branch v1.8.0 https://github.com/DLTcollab/sse2neon.git "$RUNNER_TEMP/sse2neon"
+      - name: Companion tool end to end (generated disc image, stand-in app)
+        shell: bash
+        run: |
+          set +e
+          export SSE2NEON_DIR="$RUNNER_TEMP/sse2neon"
+          bash tests/companion_e2e.sh > companion.log 2>&1
+          rc=$?
+          cat companion.log
+          if [ $rc -ne 0 ]; then
+            msg=$( (grep -E "error|FAILED|Traceback|Assertion|missing" companion.log | head -30 | cut -c1-300; echo ----; tail -c 2500 companion.log) | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+            echo "::error title=companion end to end failed::$msg"
+          fi
+          exit $rc
       - name: Build and inspect the iOS module
         shell: bash
         run: |
