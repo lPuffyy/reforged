@@ -187,10 +187,16 @@ static LONG WINAPI FatalFilter(EXCEPTION_POINTERS* ep) {
 #endif
 #endif
 
-// Exit without running static destructors: the device and audio threads started during init are still running and would race them.
-[[noreturn]] static void Quit(int code) { fflush(stdout); fflush(stderr); _Exit(code); }
+// Leaving the program: the command-line tool exits without running static destructors (the device and audio threads started during init are still running
+// and would race them). An app that embeds the runtime (REFORGED_EMBEDDED) must survive a failed start, so there the code is returned to the caller.
+#ifdef REFORGED_EMBEDDED
+static int Quit(int code) { fflush(stdout); return code; }
+#else
+[[noreturn]] static int Quit(int code) { fflush(stdout); fflush(stderr); _Exit(code); }
+#endif
 
-int main(int argc, char** argv) {
+// argv: [program, disc image or "none", XBE path, seconds to run]. Returns only when embedded (see Quit).
+extern "C" int ReforgedMain(int argc, char** argv) {
 #ifdef _WIN32
   SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
   SetUnhandledExceptionFilter(FatalFilter);
@@ -207,7 +213,7 @@ int main(int argc, char** argv) {
 #else
   plat::InstallCrashHandler(PortableCrash);
 #endif
-  if (strcmp(iso, "none") != 0 && !DiscOpen(iso)) { Log("cannot open disc image %s", iso); Quit(1); }   // "none": no disc in the drive (e.g. running the dashboard)
+  if (strcmp(iso, "none") != 0 && !DiscOpen(iso)) { Log("cannot open disc image %s", iso); return Quit(1); }   // "none": no disc in the drive (e.g. running the dashboard)
   XbeInfo info{}; char err[256];
   extern bool KernelContigOk();
   bool loaded = KernelContigOk() ? XbeLoad(xbe, &info, err, sizeof err) : (snprintf(err, sizeof err, "cannot map physical RAM at 0x80000000"), false);
@@ -222,7 +228,7 @@ int main(int argc, char** argv) {
       if (CreateProcessA(nullptr, GetCommandLineA(), nullptr, nullptr, TRUE, 0, nullptr, nullptr, &si, &pi)) { WaitForSingleObject(pi.hProcess, INFINITE); DWORD code = 0; GetExitCodeProcess(pi.hProcess, &code); return (int)code; }
     }
 #endif
-    Quit(1);
+    return Quit(1);
   }
   // Patch the kernel thunk table: each entry 0x80000000|ordinal -> address of our implementation / exported variable.
   uint32_t* thunk = (uint32_t*)G(info.kernelThunk); int n = 0, missing = 0;
@@ -253,5 +259,5 @@ int main(int argc, char** argv) {
   Nv2aDump();
   Log("[boot] time limit reached, exiting");
   fflush(stdout);
-  _Exit(0);   // other threads are still running: do not run static destructors
+  return Quit(0);
 }

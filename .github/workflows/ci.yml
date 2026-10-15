@@ -121,3 +121,37 @@ jobs:
           fi
           exit $rc
 
+  # The iOS app: built for a device (unsigned IPA) and for the Simulator, where it is installed, launched and checked.
+  ios-app:
+    needs: hygiene
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Vulkan headers and sse2neon
+        run: |
+          git clone --depth 1 --branch v1.3.280 https://github.com/KhronosGroup/Vulkan-Headers.git "$RUNNER_TEMP/vk-headers"
+          git clone --depth 1 --branch v1.8.0 https://github.com/DLTcollab/sse2neon.git "$RUNNER_TEMP/sse2neon"
+      - name: Build, package and run in the Simulator
+        shell: bash
+        run: |
+          set +e
+          export SSE2NEON_DIR="$RUNNER_TEMP/sse2neon" VULKAN_HEADERS_DIR="$RUNNER_TEMP/vk-headers/include"
+          bash tests/ios_app.sh > ios_app.log 2>&1
+          rc=$?
+          tail -c 20000 ios_app.log
+          if [ $rc -ne 0 ]; then
+            msg=$( (grep -E "error|FAILED|not |Traceback|failed|\*\* BUILD" ios_app.log | grep -v "warning:" | head -40 | cut -c1-300; echo ----; tail -c 2500 ios_app.log) | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+            echo "::error title=ios app failed::$msg"
+          fi
+          exit $rc
+      - name: Keep the unsigned IPA
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Reforged-unsigned-ipa
+          path: Reforged-unsigned.ipa
+          if-no-files-found: ignore
+

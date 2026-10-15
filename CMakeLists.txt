@@ -1,5 +1,8 @@
 cmake_minimum_required(VERSION 3.20)
 project(reforged CXX)
+if(APPLE)
+  enable_language(OBJCXX)
+endif()
 
 # The portable build: the relocated guest layout, no native-fallback execution, explicit MMIO routing. This is the configuration used on 64-bit
 # Windows, Linux and (through the app shell) iOS. Translated game code is generated on the user's machine and is never part of this repository:
@@ -12,7 +15,10 @@ set(REFORGED_LIFTED_DIR "" CACHE PATH "Directory with the locally generated tran
 set(VULKAN_HEADERS_DIR "" CACHE PATH "Vulkan-Headers 'include' directory (contains vulkan/vulkan.h)")
 set(SSE2NEON_DIR "" CACHE PATH "Directory containing sse2neon.h (required on arm64)")
 
-find_package(Python3 REQUIRED COMPONENTS Interpreter)
+set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)   # host tools (python) are found on the build machine even when cross compiling
+if(NOT IOS)
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
+endif()
 find_package(Threads REQUIRED)
 
 set(PORTABLE_SOURCES
@@ -30,11 +36,18 @@ endif()
 # Kernel import stubs are generated from tools/kernel_imports.txt and the K_/H_ functions found in src/.
 set(KERNEL_STUBS ${CMAKE_SOURCE_DIR}/src/gen/kernel_stubs.cpp)
 file(GLOB RUNTIME_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/*.cpp)
-add_custom_command(OUTPUT ${KERNEL_STUBS}
-  COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_SOURCE_DIR}/tools/gen_kernel.py
-  DEPENDS ${CMAKE_SOURCE_DIR}/tools/gen_kernel.py ${CMAKE_SOURCE_DIR}/tools/kernel_imports.txt ${RUNTIME_SOURCES}
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Generating kernel import stubs")
+if(IOS)
+  # Cross compiling for iOS: generate the stubs first on the build machine (python tools/gen_kernel.py).
+  if(NOT EXISTS ${KERNEL_STUBS})
+    message(FATAL_ERROR "run 'python tools/gen_kernel.py' before configuring for iOS (it generates ${KERNEL_STUBS})")
+  endif()
+else()
+  add_custom_command(OUTPUT ${KERNEL_STUBS}
+    COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_SOURCE_DIR}/tools/gen_kernel.py
+    DEPENDS ${CMAKE_SOURCE_DIR}/tools/gen_kernel.py ${CMAKE_SOURCE_DIR}/tools/kernel_imports.txt ${RUNTIME_SOURCES}
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT "Generating kernel import stubs")
+endif()
 
 option(REFORGED_LIFTED_AS_MODULE "Build the translated code as a loadable module (lift_module) instead of linking it into the runtime" OFF)
 set(LIFTED_SOURCES "")
@@ -46,7 +59,34 @@ if(REFORGED_LIFTED_AS_MODULE)
   set(LIFTED_LINKED "")
 endif()
 
-add_executable(reforged ${PORTABLE_SOURCES} ${PLATFORM_SOURCES} ${KERNEL_STUBS} ${LIFTED_LINKED})
+# ---- iOS: the runtime as a static library plus the app bundle (built unsigned; the user's sideloading tool signs it) ----
+if(IOS)
+  add_library(reforged_core STATIC ${PORTABLE_SOURCES} ${PLATFORM_SOURCES} ${KERNEL_STUBS})
+  target_include_directories(reforged_core PUBLIC src)
+  target_compile_definitions(reforged_core PRIVATE LIFT_NO_NATIVE LIFT_EXPLICIT_MMIO REFORGED_EMBEDDED)
+  if(VULKAN_HEADERS_DIR)
+    target_include_directories(reforged_core PRIVATE ${VULKAN_HEADERS_DIR})
+  endif()
+  if(SSE2NEON_DIR)
+    target_include_directories(reforged_core PRIVATE ${SSE2NEON_DIR})
+  endif()
+  target_compile_options(reforged_core PRIVATE -Wno-unused-result -Wno-format-security -fno-strict-aliasing)
+  target_link_libraries(reforged_core PUBLIC Threads::Threads ${CMAKE_DL_LIBS})
+
+  add_executable(ReforgedApp MACOSX_BUNDLE ios/main.mm ios/AppDelegate.mm)
+  target_link_libraries(ReforgedApp PRIVATE reforged_core "-framework UIKit" "-framework Foundation")
+  set_target_properties(ReforgedApp PROPERTIES
+    MACOSX_BUNDLE_INFO_PLIST ${CMAKE_SOURCE_DIR}/ios/Info.plist.in
+    MACOSX_BUNDLE_GUI_IDENTIFIER dev.reforged.app
+    XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER dev.reforged.app
+    XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED NO
+    XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED NO
+    XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY ""
+    XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2")
+  return()
+endif()
+
+add_executable(reforged src/cli_main.cpp ${PORTABLE_SOURCES} ${PLATFORM_SOURCES} ${KERNEL_STUBS} ${LIFTED_LINKED})
 target_include_directories(reforged PRIVATE src)
 target_compile_definitions(reforged PRIVATE LIFT_NO_NATIVE LIFT_EXPLICIT_MMIO)
 if(REFORGED_LIFTED_DIR AND NOT REFORGED_LIFTED_AS_MODULE)
