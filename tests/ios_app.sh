@@ -43,5 +43,31 @@ test -f "$log" || { echo "the runtime wrote no log"; exit 1; }
 cat "$log"
 grep -q "register window mapped" "$log" || { echo "the runtime did not finish initialising (guest memory, device models)"; exit 1; }   # logged after guest memory and the device windows are mapped
 grep -q "XBE load failed" "$log" || { echo "the runtime did not reach the game load step"; exit 1; }
+
+echo "=== a translated program running inside the app (Simulator)"
+python3 -m pip install --quiet capstone
+rm -rf simmod && mkdir -p simmod/work/lift
+( cd simmod
+  python3 -I "$root/tests/make_test_xbe.py" lift_test.xbe expected.txt
+  python3 -I "$root/tools/lift_survey.py" lift_test.xbe > survey.log
+  python3 -I "$root/tools/lift.py" lift_test.xbe --out work/lift/gen > lift.log
+  python3 -I "$root/tools/build_module.py" --gen work/lift/gen --out reforged_game.dylib --target arm64-apple-ios15.0-simulator     --clang clang++ --ld system --sse2neon "$SSE2NEON_DIR"
+  codesign -s - --force reforged_game.dylib )
+xcrun simctl terminate "$udid" dev.reforged.app || true
+mkdir -p "$simapp/Frameworks" "$simapp/title"
+cp simmod/reforged_game.dylib "$simapp/Frameworks/reforged_game.dylib"
+cp simmod/lift_test.xbe "$simapp/title/default.xbe"
+codesign --force --deep -s - "$simapp"
+xcrun simctl install "$udid" "$simapp"
+xcrun simctl launch "$udid" dev.reforged.app
+sleep 20
+data="$(xcrun simctl get_app_container "$udid" dev.reforged.app data)"
+log="$data/Documents/reforged.log"
+test -f "$log" || { echo "no log"; exit 1; }
+grep -E "lift\]|DbgPrint|FATAL|crash" "$log" | head -40
+grep -q "translated functions" "$log" || { echo "the app did not load the game module"; head -40 "$log"; exit 1; }
+grep '^\[DbgPrint\] ' "$log" | sed 's/^\[DbgPrint\] //' > simmod/got.txt || true
+if ! diff -u simmod/expected.txt simmod/got.txt; then echo "OUTPUT MISMATCH inside the app"; head -60 "$log"; exit 1; fi
+echo "translated program output matches inside the iOS app"
 xcrun simctl shutdown "$udid" || true
 echo "iOS app checks passed"

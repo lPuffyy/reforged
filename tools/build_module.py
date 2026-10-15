@@ -22,6 +22,7 @@ def main():
     ap.add_argument('--opt', default='-O1')
     ap.add_argument('--jobs', type=int, default=os.cpu_count() or 2)
     ap.add_argument('--keep', default='', help='keep object files in this directory')
+    ap.add_argument('--ld', default='lld', choices=['lld', 'system'], help="linker: lld (portable) or the system linker (Apple's ld on a Mac)")
     a = ap.parse_args()
 
     clang = shutil.which(a.clang) or a.clang
@@ -51,7 +52,7 @@ def main():
         for src, out in failed[:3]: print('--- %s\n%s' % (src, out[:4000]))
         sys.exit('%d file(s) failed to compile' % len(failed))
 
-    link = [clang, '--target=' + a.target, '-fuse-ld=lld', '-nostdlib', '-dynamiclib', '-Wl,-undefined,dynamic_lookup',
+    link = [clang, '--target=' + a.target] + (['-fuse-ld=lld'] if a.ld == 'lld' else []) + ['-nostdlib', '-dynamiclib', '-Wl,-undefined,dynamic_lookup',
             '-Wl,-install_name,@rpath/' + os.path.basename(a.out), '-o', a.out] + objs
     rc, out = run(link)
     if rc != 0: sys.exit('link failed:\n' + out[:4000])
