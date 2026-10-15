@@ -29,7 +29,7 @@ bool SoftDecodeTexture(int stage, std::vector<uint32_t>* bgra, int* w, int* h, u
 #define VK_FUNCS(X) \
   X(vkDestroyInstance) X(vkEnumeratePhysicalDevices) X(vkGetPhysicalDeviceProperties) X(vkGetPhysicalDeviceMemoryProperties) X(vkGetPhysicalDeviceQueueFamilyProperties) \
   X(vkGetPhysicalDeviceSurfaceSupportKHR) X(vkGetPhysicalDeviceSurfaceCapabilitiesKHR) X(vkGetPhysicalDeviceSurfaceFormatsKHR) X(vkGetPhysicalDeviceSurfacePresentModesKHR) \
-  X(vkDestroySurfaceKHR) X(vkCreateDevice) X(vkGetDeviceProcAddr) X(vkGetPhysicalDeviceFeatures)
+  X(vkDestroySurfaceKHR) X(vkEnumerateDeviceExtensionProperties) X(vkCreateDevice) X(vkGetDeviceProcAddr) X(vkGetPhysicalDeviceFeatures)
 #define VK_DEV_FUNCS(X) \
   X(vkDestroyDevice) X(vkGetDeviceQueue) X(vkCreateSwapchainKHR) X(vkDestroySwapchainKHR) X(vkGetSwapchainImagesKHR) X(vkAcquireNextImageKHR) X(vkQueuePresentKHR) \
   X(vkCreateBuffer) X(vkDestroyBuffer) X(vkGetBufferMemoryRequirements) X(vkAllocateMemory) X(vkFreeMemory) X(vkBindBufferMemory) X(vkMapMemory) \
@@ -127,8 +127,10 @@ bool InitVulkan() {
   float prio = 1.f; VkDeviceQueueCreateInfo qci{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO}; qci.queueFamilyIndex = g_qfam; qci.queueCount = 1; qci.pQueuePriorities = &prio;
   VkPhysicalDeviceVulkan13Features f13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES}; f13.dynamicRendering = VK_TRUE;
   VkPhysicalDeviceFeatures feats{}; feats.independentBlend = VK_TRUE;
-  const char* dext[] = {"VK_KHR_swapchain"};
-  VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO}; dci.pNext = &f13; dci.queueCreateInfoCount = 1; dci.pQueueCreateInfos = &qci; dci.enabledExtensionCount = 1; dci.ppEnabledExtensionNames = dext; dci.pEnabledFeatures = &feats;
+  std::vector<const char*> dext = {"VK_KHR_swapchain"};
+  { uint32_t en = 0; vkEnumerateDeviceExtensionProperties(g_phys, nullptr, &en, nullptr); std::vector<VkExtensionProperties> ex(en); vkEnumerateDeviceExtensionProperties(g_phys, nullptr, &en, ex.data());
+    for (auto& e : ex) if (!strcmp(e.extensionName, "VK_KHR_portability_subset")) dext.push_back("VK_KHR_portability_subset"); }   // layered implementations (MoltenVK on Metal) require it to be enabled when offered
+  VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO}; dci.pNext = &f13; dci.queueCreateInfoCount = 1; dci.pQueueCreateInfos = &qci; dci.enabledExtensionCount = (uint32_t)dext.size(); dci.ppEnabledExtensionNames = dext.data(); dci.pEnabledFeatures = &feats;
   if (vkCreateDevice(g_phys, &dci, nullptr, &g_dev) != VK_SUCCESS) { Log("[vk] vkCreateDevice failed"); return false; }
 #define LOADD(n) n = (PFN_##n)vkGetDeviceProcAddr(g_dev, #n);
   VK_DEV_FUNCS(LOADD)

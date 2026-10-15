@@ -16,6 +16,15 @@ echo "app: $app"
 test -d "$app"
 file "$app/ReforgedApp"
 xcrun vtool -show-build "$app/ReforgedApp" | head -6
+# the Vulkan-on-Metal layer (device build only: the package has no Simulator slice), with its license
+mvk_url="https://github.com/KhronosGroup/MoltenVK/releases/download/v1.4.2/MoltenVK-ios.tar"
+curl -sL -o MoltenVK-ios.tar "$mvk_url"
+echo "MoltenVK-ios.tar sha256: $(shasum -a 256 MoltenVK-ios.tar | cut -d' ' -f1)"
+mkdir -p mvk && tar -xf MoltenVK-ios.tar -C mvk
+mkdir -p "$app/Frameworks"
+cp -R mvk/MoltenVK/MoltenVK/dynamic/MoltenVK.xcframework/ios-arm64/MoltenVK.framework "$app/Frameworks/"
+cp mvk/MoltenVK/LICENSE "$app/MoltenVK-LICENSE.txt"
+file "$app/Frameworks/MoltenVK.framework/MoltenVK"
 rm -rf ipa && mkdir -p ipa/Payload && cp -R "$app" ipa/Payload/
 (cd ipa && zip -qry ../Reforged-unsigned.ipa Payload)
 ls -l Reforged-unsigned.ipa
