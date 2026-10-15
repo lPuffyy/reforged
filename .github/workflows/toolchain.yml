@@ -56,9 +56,17 @@ jobs:
       - name: Pack
         shell: bash
         run: |
+          set +e
           cli="$(find xbsdb/build -name 'XbSymbolDatabaseCLI' -o -name 'XbSymbolDatabaseCLI.exe' | grep -v '\.pdb$' | head -1)"
-          python -I tools/make_toolchain_pack.py --llvm-archive llvm.tar.xz --llvm-version "$LLVM_MAJOR" --xbsym-cli "$cli" \
-            --xbsym-license xbsdb/LICENSE --xbsym-commit "$XBSDB_COMMIT" --sse2neon-header sse2neon/sse2neon.h --sse2neon-license sse2neon/LICENSE --host "${{ matrix.name }}" --out "toolchain-${{ matrix.name }}.zip"
+          echo "scanner: $cli"
+          python -I tools/make_toolchain_pack.py --llvm-archive llvm.tar.xz --llvm-version "$LLVM_MAJOR" --xbsym-cli "$cli"             --xbsym-license xbsdb/LICENSE --xbsym-commit "$XBSDB_COMMIT" --sse2neon-header sse2neon/sse2neon.h --sse2neon-license sse2neon/LICENSE             --host "${{ matrix.name }}" --out "toolchain-${{ matrix.name }}.zip" > pack.log 2>&1
+          rc=$?
+          cat pack.log
+          if [ $rc -ne 0 ]; then
+            msg=$( (echo "scanner: $cli"; tail -c 3000 pack.log) | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+            echo "::error title=pack failed (${{ matrix.name }})::$msg"
+          fi
+          exit $rc
       - name: Test the pack (cross-compile the test module with only what is in it)
         shell: bash
         run: |

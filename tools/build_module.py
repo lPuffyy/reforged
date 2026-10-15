@@ -4,7 +4,7 @@ runtime headers. This is the companion tool's compile step; CI runs it to prove 
 usage: python -I tools/build_module.py --gen work/lift/gen --out game_module.dylib [--clang clang++] [--target arm64-apple-ios15.0]
                                        [--sse2neon DIR] [--opt -O1] [--jobs N]
 The module resolves libm/libc functions and nothing else from the system when it is loaded; it talks to the runtime through the HostApi table."""
-import argparse, concurrent.futures, glob, os, shutil, subprocess, sys, time
+import argparse, concurrent.futures, glob, os, re, shutil, subprocess, sys, time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 

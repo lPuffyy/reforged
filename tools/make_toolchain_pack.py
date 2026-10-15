@@ -17,16 +17,18 @@ def main():
     # archive member (relative to its top directory) -> name in the pack. Linux/macOS archives name the compiler clang-<major>; Windows ships clang.exe.
     wanted = {'bin/clang-%s' % major: 'bin/clang' + exe, 'bin/clang' + exe: 'bin/clang' + exe, 'bin/lld' + exe: 'bin/lld' + exe, 'LICENSE.TXT': 'licenses/LLVM-LICENSE.TXT'}
     include_prefix = 'lib/clang/%s/include/' % major
-    found = {}; headers = {}
+    found = {}; headers = {}; seen_bin = []
     with tarfile.open(a.llvm_archive, 'r|xz') as tar:
         for m in tar:
+            if m.issym() and m.name.count('/') == 2 and '/bin/' in m.name: seen_bin.append(m.name.split('/', 1)[1] + '->' + m.linkname)
             if not m.isfile(): continue
             rel = m.name.split('/', 1)[1] if '/' in m.name else m.name
+            if rel.startswith('bin/') and rel.count('/') == 1: seen_bin.append(rel)
             if rel in wanted and wanted[rel] not in found: found[wanted[rel]] = (m.mode, tar.extractfile(m).read())
             elif rel.startswith(include_prefix): headers[rel] = tar.extractfile(m).read()
     need = ['bin/clang' + exe, 'bin/lld' + exe, 'licenses/LLVM-LICENSE.TXT']
     missing = [n for n in need if n not in found]
-    if missing or not headers: raise SystemExit('the LLVM archive did not contain: %s (headers found: %d)' % (missing, len(headers)))
+    if missing or not headers: raise SystemExit('the LLVM archive did not contain: %s (headers found: %d); files in bin/: %s' % (missing, len(headers), ' '.join(sorted(seen_bin))[:1500]))
     manifest = {'llvm': a.llvm_version, 'host': a.host, 'xbsymbol_database_commit': a.xbsym_commit, 'built': time.strftime('%Y-%m-%d')}
     with zipfile.ZipFile(a.out, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as z:
         def add(name, data, mode=0o644):
