@@ -110,7 +110,7 @@ extern "C" void ReforgedSetMetalLayer(void* layer);
 }
 
 - (void)chooseDisc {
-  UIDocumentPickerViewController* picker = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeData] asCopy:NO];
+  UIDocumentPickerViewController* picker = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeItem, UTTypeData, UTTypeDiskImage] asCopy:NO];
   picker.delegate = self;
   [self.window.rootViewController presentViewController:picker animated:YES completion:nil];
 }
