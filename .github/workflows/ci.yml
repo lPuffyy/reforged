@@ -182,6 +182,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # overlapping runs: only the run for the newest commit may publish (an older run finishing late would overwrite the newer app)
+          latest="$(git ls-remote "https://github.com/$GITHUB_REPOSITORY" refs/heads/main | cut -f1)"
+          if [ "$latest" != "$GITHUB_SHA" ]; then echo "a newer commit exists ($latest): not publishing the preview from $GITHUB_SHA"; exit 0; fi
           gh release delete ipa-preview -y --cleanup-tag || true
           gh release create ipa-preview Reforged-unsigned.ipa --prerelease --target "$GITHUB_SHA" --title "Preview app (unsigned, untested)"             --notes "Generic app, contains no game code, not signed by the project key. For testing with the companion tool only (--ipa)."
 
