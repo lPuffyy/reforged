@@ -159,6 +159,7 @@ static void DumpThreads(const char*) {}   // thread sampling reads x86 register 
 #endif
 
 void Nv2aDump();
+bool KernelContigOk();
 void LaunchPageInit();
 void KernelSetImageName(const char* hostXbe);
 bool LiftEnabled(); void LiftInit(const char*); uint32_t KernelImportAddr(const KernelImport* k);
@@ -215,7 +216,6 @@ extern "C" int ReforgedMain(int argc, char** argv) {
 #endif
   if (strcmp(iso, "none") != 0 && !DiscOpen(iso)) { Log("cannot open disc image %s", iso); return Quit(1); }   // "none": no disc in the drive (e.g. running the dashboard)
   XbeInfo info{}; char err[256];
-  extern bool KernelContigOk();
   bool loaded = KernelContigOk() ? XbeLoad(xbe, &info, err, sizeof err) : (snprintf(err, sizeof err, "cannot map physical RAM at 0x80000000"), false);
   if (!loaded) {
     // With ASLR the low 5.5 MB are usually free, but the OS sometimes drops a mapping there: start over (a fresh process re-rolls the layout).
