@@ -16,7 +16,7 @@ HERE = os.path.join(BASE, 'tools')
 sys.path.insert(0, HERE)
 REPO = 'lPuffyy/reforged'
 # Public key that release signatures are checked against (32 bytes, hex). Set when the project's release key is created; until then downloads are refused.
-RELEASE_PUBLIC_KEY = ''
+RELEASE_PUBLIC_KEY = '3c848690fff6afddbdf28070a351c72d6c3f9799d3eed261a3f5265f21230670'
 APP_NAME = 'Reforged'
 
 
