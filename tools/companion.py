@@ -153,7 +153,7 @@ def main():
     xbe = img.read(entry[0]); img.close()
     print('  found %s (%.1f MB)' % (entry[0], len(xbe) / 1e6))
 
-    work = a.work or tempfile.mkdtemp(prefix='reforged-')
+    work = os.path.abspath(a.work) if a.work else tempfile.mkdtemp(prefix='reforged-')
     os.makedirs(os.path.join(work, 'work', 'lift'), exist_ok=True)
     xbe_path = os.path.join(work, 'default.xbe'); open(xbe_path, 'wb').write(xbe)
     title = os.path.join(work, 'title'); os.makedirs(title, exist_ok=True)
