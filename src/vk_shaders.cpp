@@ -153,6 +153,8 @@ std::vector<uint32_t> GenVertexShader(const uint32_t* prog, uint32_t start, uint
 
 // ======================= fragment shader =======================
 std::vector<uint32_t> GenFragmentShader(const FsInfo& f) {
+  static const char* dbgOnly = getenv("XBOX_FS_DBGSTAGES");   // debug views (XBOX_FS_DEBUG*) apply only to shaders with this many combiner stages
+  const bool dbgOn = !dbgOnly || (uint32_t)atoi(dbgOnly) == f.numStages;
   Spv s;
   uint32_t tF = s.TFloat(), tV4 = s.TVec4(), tV3 = s.TVec(tF, 3), tBool = s.TBool();
   // uniforms: fac0[8], fac1[8], final0, final1, fogColor, texSize[4] (xy), alphaRef
@@ -266,6 +268,8 @@ std::vector<uint32_t> GenFragmentShader(const FsInfo& f) {
   auto writeRgb = [&](uint32_t r, uint32_t v3) { if (!r) return; uint32_t old = s.Load(tV4, reg[r]); uint32_t a = comp(old, 3); s.Store(reg[r], s.Emit(Spv::OpCompositeConstruct, tV4, {comp(v3, 0), comp(v3, 1), comp(v3, 2), a})); };
   auto writeA = [&](uint32_t r, uint32_t v) { if (!r) return; uint32_t old = s.Load(tV4, reg[r]); s.Store(reg[r], s.Emit(Spv::OpCompositeInsert, tV4, {v, old, 3})); };
   static int maxStages = getenv("XBOX_FS_STAGES") ? atoi(getenv("XBOX_FS_STAGES")) : 99;
+  int dbgStage = -1, dbgReg = 0; if (const char* dr = getenv("XBOX_FS_DEBUGREG")) if (dbgOn) sscanf(dr, "%d,%d", &dbgStage, &dbgReg);   // debug: show register <reg> after combiner stage <stage>
+  uint32_t dbgVal = 0;
   for (uint32_t st = 0; st < f.numStages && st < 8 && (int)st < maxStages; st++) {
     s.Store(reg[1], uniformVec(0, f.uniqueC0 ? st : 0)); s.Store(reg[2], uniformVec(1, f.uniqueC1 ? st : 0));
     // RGB portion
@@ -300,10 +304,11 @@ std::vector<uint32_t> GenFragmentShader(const FsInfo& f) {
       ab = postF(ab, mapping); cd = postF(cd, mapping); sum = postF(sum, mapping);
       writeA(ocw & 15, cd); writeA((ocw >> 4) & 15, ab); writeA((ocw >> 8) & 15, sum);
     }
+    if ((int)st == dbgStage && dbgReg > 0 && dbgReg < 16) { uint32_t dv = s.Load(tV4, reg[dbgReg]); dbgVal = s.Shuffle(tV3, dv, dv, {0, 1, 2}); }
   }
   // ---- final combiner ----
   uint32_t finalRgb, finalA;
-  if ((!f.final0 && !f.final1) || getenv("XBOX_FS_NOFINAL")) {
+  if ((!f.final0 && !f.final1) || (dbgOn && getenv("XBOX_FS_NOFINAL"))) {
     uint32_t src = s.Load(tV4, reg[f.numStages ? 12 : 4]); finalRgb = s.Shuffle(tV3, src, src, {0, 1, 2}); finalA = comp(src, 3);
   } else {
     uint32_t flags = f.final1 & 0xFF; bool clampSum = flags & 0x80;
@@ -325,10 +330,19 @@ std::vector<uint32_t> GenFragmentShader(const FsInfo& f) {
     uint32_t oneM = s.Emit(Spv::OpFSub, tV3, {s.CVec(3, one), A});
     uint32_t res = s.Emit(Spv::OpFAdd, tV3, {s.Emit(Spv::OpFAdd, tV3, {s.Emit(Spv::OpFMul, tV3, {A, B}), s.Emit(Spv::OpFMul, tV3, {oneM, C})}), D});
     finalRgb = s.Glsl3(tV3, Spv::G_FClamp, res, s.CVec(3, zero), s.CVec(3, one));
+    if (dbgVal) finalRgb = s.Glsl3(tV3, Spv::G_FClamp, dbgVal, s.CVec(3, zero), s.CVec(3, one));
+    if (const char* dbg = dbgOn ? getenv("XBOX_FS_DEBUGFINAL") : nullptr) {   // debug: show one piece of the final combiner instead (1 = E*F, 2 = E, 3 = F, 4 = A, 5 = B)
+      uint32_t pick = dbg[0] == '1' ? ef : dbg[0] == '2' ? E : dbg[0] == '3' ? F : dbg[0] == '4' ? A : dbg[0] == '6' ? D : dbg[0] == '7' ? res : B;
+      finalRgb = s.Glsl3(tV3, Spv::G_FClamp, pick, s.CVec(3, zero), s.CVec(3, one)); }
     uint32_t gin = (f.final1 >> 8) & 255; uint32_t gsrc = (gin & 15) == 0 ? zero4 : s.Load(tV4, reg[gin & 15]);
     finalA = s.Glsl3(tF, Spv::G_FClamp, mapIn(comp(gsrc, (gin & 0x10) ? 3 : 2), gin & 0xE0, false), zero, one);   // G input channel: bit 4 set = alpha, clear = blue (xemu get_input_var)
   }
+  if (getenv("XBOX_FS_FORCEALPHA")) finalA = one;   // debug: opaque output alpha
   uint32_t color = s.Emit(Spv::OpCompositeConstruct, tV4, {comp(finalRgb, 0), comp(finalRgb, 1), comp(finalRgb, 2), finalA});
+  if (const char* dtc = dbgOn ? getenv("XBOX_FS_DEBUGTC") : nullptr) {   // debug: show the stage's texture coordinate (x, y, w) instead of the shaded colour
+    uint32_t tcv = s.Load(tV4, inT[atoi(dtc) & 3]);
+    auto cl = [&](uint32_t v) { return s.Glsl3(tF, Spv::G_FClamp, v, zero, one); };
+    color = s.Vec4(cl(comp(tcv, 0)), cl(comp(tcv, 1)), cl(comp(tcv, 3)), one); }
   // alpha test (discard)
   if (f.alphaTest && !getenv("XBOX_FS_NOALPHA")) {
     uint32_t a = finalA; uint32_t ref = s.Emit(Spv::OpFDiv, tF, {comp(uniformVec(6, ~0u), 0), s.CFloat(255.f)});

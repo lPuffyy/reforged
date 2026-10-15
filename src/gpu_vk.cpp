@@ -349,6 +349,9 @@ VkPipeline GetPipeline(const PipeKey& k, const Shader& vs, const Shader& fs) {
   rs.frontFace = k.front == 0x901 ? VK_FRONT_FACE_COUNTER_CLOCKWISE : VK_FRONT_FACE_CLOCKWISE;
   VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO}; ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
   VkPipelineDepthStencilStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO}; ds.depthTestEnable = k.depthTest; ds.depthWriteEnable = k.depthMask && k.depthTest; ds.depthCompareOp = (VkCompareOp)(k.depthFunc >= 0x200 ? k.depthFunc - 0x200 : 7);
+  // An EQUAL depth test (a second material pass over the same mesh) needs bit-identical depth from two different vertex programs; GPUs do not guarantee that, so test "less or equal" with a small pull toward the camera.
+  { static const bool eqFix = getenv("XBOX_NO_EQFIX") == nullptr;
+    if (eqFix && k.depthFunc == 0x202) { ds.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL; rs.depthBiasEnable = VK_TRUE; rs.depthBiasConstantFactor = -64.f; rs.depthBiasSlopeFactor = -2.f; rs.depthBiasClamp = 0.f; } }
   VkPipelineColorBlendAttachmentState ba{}; ba.blendEnable = k.blendEnable; ba.srcColorBlendFactor = ba.srcAlphaBlendFactor = BF(k.sfac); ba.dstColorBlendFactor = ba.dstAlphaBlendFactor = BF(k.dfac); ba.colorBlendOp = ba.alphaBlendOp = BO(k.eq);
   ba.colorWriteMask = ((k.colorMask & 0x00010000) ? VK_COLOR_COMPONENT_R_BIT : 0) | ((k.colorMask & 0x00000100) ? VK_COLOR_COMPONENT_G_BIT : 0) | ((k.colorMask & 1) ? VK_COLOR_COMPONENT_B_BIT : 0) | ((k.colorMask & 0x01000000) ? VK_COLOR_COMPONENT_A_BIT : 0);
   VkPipelineColorBlendStateCreateInfo cb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO}; cb.attachmentCount = 1; cb.pAttachments = &ba;
@@ -424,7 +427,11 @@ static void GpuDrawImpl(uint32_t prim, const SoftVertex* verts, size_t n) {
     if (nt && nn < 60 && R(0x1E70) == 0) { static uint32_t t0 = (uint32_t)plat::TickMs(); if ((int)((uint32_t)plat::TickMs() - t0) > atoi(nt) * 1000) { float bx0, by0, bx1, by1, bp[4], bd0[4], bd1[4], bt0[4]; SoftScreenBBox(verts, n, &bx0, &by0, &bx1, &by1); SoftFirstVertexOut(verts, n, bp, bd0, bd1, bt0);
       if (bx1 - bx0 > 200 && by1 - by0 > 150) { ++nn; Log("[notex] draw #%d prim=%u n=%zu bbox=(%.0f,%.0f)-(%.0f,%.0f) blend=%u src=%x dst=%x depth=%u mask=%08x d0=(%.2f %.2f %.2f %.2f) c0=%08x c1=%08x final=%08x/%08x cc=%08x icwA0=%08x ocwA0=%08x icwC0=%08x ocwC0=%08x", g_frameDraws, prim, n, bx0, by0, bx1, by1, R(0x304), R(0x344), R(0x348), R(0x30C), R(0x358), bd0[0], bd0[1], bd0[2], bd0[3], R(0xA60), R(0xA80), R(0x288), R(0x28C), R(0x1E60), R(0x260), R(0xAA0), R(0xAC0), R(0x1E40)); } } } }
   { static const char* sk = getenv("XBOX_SKIPTEX0"); if (sk) { static std::vector<uint32_t> skipOffs; static bool init = false; if (!init) { init = true; for (const char* q = sk; *q;) { char* e; skipOffs.push_back((uint32_t)strtoul(q, &e, 0)); q = (*e == ',') ? e + 1 : e; if (e == q && *q) break; } } for (uint32_t o : skipOffs) if (R(0x1B00) == o) return; } }   // debug: skip every draw whose texture 0 sits at this offset
-  { static int mx = getenv("XBOX_MAXDRAW") ? atoi(getenv("XBOX_MAXDRAW")) : 1 << 30, mn = getenv("XBOX_MINDRAW") ? atoi(getenv("XBOX_MINDRAW")) : 0; int idx = g_frameDraws++; if (idx >= mx || idx < mn) return; if (g_capSweep >= 0 && idx >= g_capSweep) return; }
+  { static int mx = getenv("XBOX_MAXDRAW") ? atoi(getenv("XBOX_MAXDRAW")) : 1 << 30, mn = getenv("XBOX_MINDRAW") ? atoi(getenv("XBOX_MINDRAW")) : 0; int idx = g_frameDraws++;
+    // live bisect aid: a file "drawrange.txt" holding "<first> <last+1>" renders only those draws of each frame (checked once per flip; delete the file to render everything)
+    static int fmn = -1, fmx = 0, lastChecked = -1; if (g_dbgFlips != lastChecked) { lastChecked = g_dbgFlips; FILE* rf = fopen("drawrange.txt", "r"); fmn = -1; if (rf) { int ra = 0, rb = 1 << 30; if (fscanf(rf, "%d %d", &ra, &rb) >= 1) { fmn = ra; fmx = rb; } fclose(rf); } }
+    if (fmn >= 0) { if (idx < fmn || idx >= fmx) return; } else if (idx >= mx || idx < mn) return;
+    if (g_capSweep >= 0 && idx >= g_capSweep) return; }
   if (!GpuVkReady() || n < 3) return;
   int sx, sy, sw, sh; if (!SurfaceDims(&sx, &sy, &sw, &sh)) return;
   const bool ffVs = (R(0x1E94) & 3) != 2;
@@ -441,7 +448,10 @@ static void GpuDrawImpl(uint32_t prim, const SoftVertex* verts, size_t n) {
   // ---- vertex program ----
   const uint32_t* prog = Pgraph3dProgram(); uint32_t start = R(0x1EA0);
   uint64_t vhash = ffVs ? (0xFF00FF00FF00FF00ull ^ Fnv(&ffs, sizeof ffs)) : Fnv(prog + start * 4, (136 - start) * 16, start); Shader& vs = g_vsCache[vhash];
-  if (!vs.mod) { uint32_t used; auto spv = ffVs ? GenFixedVertexShader(ffs, &used) : getenv("XBOX_VS_SIMPLE") ? GenSimpleVertexShader(&used) : GenVertexShader(prog, start, &used); vs.mod = MakeModule(spv); vs.used = used; Log("[vk] vertex shader %016llx: %zu words, inputs mask 0x%x", (unsigned long long)vhash, spv.size(), used); if (ffVs) Log("[vk]   fixed-function: lighting=%u skin=%u normalize=%u fog=%u/%u texgen0=%x,%x,%x,%x texmat=%u%u%u%u lights=%u,%u,%u,%u", ffs.lighting, ffs.skin, ffs.normalize, ffs.fogOn, ffs.fogGen, ffs.texgen[0][0], ffs.texgen[0][1], ffs.texgen[0][2], ffs.texgen[0][3], ffs.texMat[0], ffs.texMat[1], ffs.texMat[2], ffs.texMat[3], ffs.light[0], ffs.light[1], ffs.light[2], ffs.light[3]); }
+  if (!vs.mod) { uint32_t used; auto spv = ffVs ? GenFixedVertexShader(ffs, &used) : getenv("XBOX_VS_SIMPLE") ? GenSimpleVertexShader(&used) : GenVertexShader(prog, start, &used); vs.mod = MakeModule(spv); vs.used = used; Log("[vk] vertex shader %016llx: %zu words, inputs mask 0x%x", (unsigned long long)vhash, spv.size(), used);
+      { static const char* vd = getenv("XBOX_VSDUMP");   // XBOX_VSDUMP=<hex prefix of a vertex shader hash>: log that program's raw instruction words
+        char hx[20]; snprintf(hx, sizeof hx, "%016llx", (unsigned long long)vhash);
+        if (vd && *vd && (!strncmp(hx, vd, strlen(vd)) || (vd[0] == '#' && (size_t)atoi(vd + 1) == spv.size())) && !ffVs) for (uint32_t pc = start; pc < 136; pc++) { const uint32_t* w = prog + pc * 4; Log("[vsdump] %s pc %u: %08x %08x %08x %08x", hx, pc, w[0], w[1], w[2], w[3]); if (w[3] & 1) break; } } if (ffVs) Log("[vk]   fixed-function: lighting=%u skin=%u normalize=%u fog=%u/%u texgen0=%x,%x,%x,%x texmat=%u%u%u%u lights=%u,%u,%u,%u", ffs.lighting, ffs.skin, ffs.normalize, ffs.fogOn, ffs.fogGen, ffs.texgen[0][0], ffs.texgen[0][1], ffs.texgen[0][2], ffs.texgen[0][3], ffs.texMat[0], ffs.texMat[1], ffs.texMat[2], ffs.texMat[3], ffs.light[0], ffs.light[1], ffs.light[2], ffs.light[3]); }
   // ---- fragment (combiner) state ----
   FsInfo fi; uint32_t cc = R(0x1E60); fi.numStages = cc & 0xFF; fi.uniqueC0 = (cc >> 8) & 0x10; fi.uniqueC1 = (cc >> 8) & 0x100; fi.muxMsb = (cc >> 8) & 1;
   for (int i = 0; i < 8; i++) { fi.icwC[i] = R(0xAC0 + 4 * i); fi.icwA[i] = R(0x260 + 4 * i); fi.ocwC[i] = R(0x1E40 + 4 * i); fi.ocwA[i] = R(0xAA0 + 4 * i); }
@@ -466,7 +476,14 @@ static void GpuDrawImpl(uint32_t prim, const SoftVertex* verts, size_t n) {
   g_tTexUs += NowUs() - tA;
   uint64_t fhash = Fnv(&fi, sizeof fi); Shader& fs = g_fsCache[fhash];
   if (!fs.mod) { auto spv = getenv("XBOX_FS_SIMPLE") ? GenSimpleFragmentShader() : GenFragmentShader(fi); fs.mod = MakeModule(spv); Log("[vk] fragment shader %016llx: %zu words (%u stages) texture modes %u,%u,%u,%u cube %u%u%u%u", (unsigned long long)fhash, spv.size(), fi.numStages,
-      fi.texMode[0], fi.texMode[1], fi.texMode[2], fi.texMode[3], (R(0x1B04) >> 2) & 1, (R(0x1B44) >> 2) & 1, (R(0x1B84) >> 2) & 1, (R(0x1BC4) >> 2) & 1); }
+      fi.texMode[0], fi.texMode[1], fi.texMode[2], fi.texMode[3], (R(0x1B04) >> 2) & 1, (R(0x1B44) >> 2) & 1, (R(0x1B84) >> 2) & 1, (R(0x1BC4) >> 2) & 1); 
+    { static const char* fd = getenv("XBOX_FSDUMP");   // XBOX_FSDUMP=<number of combiner stages>: log the register-combiner words of every fragment shader with that many stages
+      bool fdm = false; if (fd) for (const char* q = fd; *q;) { if ((uint32_t)atoi(q) == fi.numStages) fdm = true; while (*q && *q != ',') ++q; if (*q == ',') ++q; }
+      if (fdm) {
+        Log("[fsdump] fs %016llx stages=%u uniqueC0=%d uniqueC1=%d muxMsb=%d final0=%08x final1=%08x modes=%u,%u,%u,%u present=%d%d%d%d alphaTest=%d/%x", (unsigned long long)fhash, fi.numStages, (int)fi.uniqueC0, (int)fi.uniqueC1, (int)fi.muxMsb, fi.final0, fi.final1,
+            fi.texMode[0], fi.texMode[1], fi.texMode[2], fi.texMode[3], (int)fi.texPresent[0], (int)fi.texPresent[1], (int)fi.texPresent[2], (int)fi.texPresent[3], (int)fi.alphaTest, fi.alphaFunc);
+        for (uint32_t k = 0; k < fi.numStages && k < 8; k++) Log("[fsdump]   stage %u: icwC=%08x icwA=%08x ocwC=%08x ocwA=%08x", k, fi.icwC[k], fi.icwA[k], fi.ocwC[k], fi.ocwA[k]); } }
+  }
   // ---- geometry: triangle list + packed used attributes ----
   std::vector<uint32_t> idx;
   auto tri = [&](uint32_t a, uint32_t b, uint32_t c) { idx.push_back(a); idx.push_back(b); idx.push_back(c); };
@@ -493,6 +510,10 @@ static void GpuDrawImpl(uint32_t prim, const SoftVertex* verts, size_t n) {
   argb(R(0x1E20), fb + 64); argb(R(0x1E24), fb + 68); argb(R(0x294), fb + 72);   // final-combiner constants, fog colour
   for (int t = 0; t < 4; t++) { float* d = fb + 76 + 4 * t; if (tex[t]) { d[0] = (float)tex[t]->img.w; d[1] = (float)tex[t]->img.h; } else if (rtTex[t]) { d[0] = (float)rtTex[t]->w; d[1] = (float)rtTex[t]->h; } else if (rtDepth[t]) { d[0] = (float)rtDepth[t]->w; d[1] = (float)rtDepth[t]->h; } }
   fb[92] = (float)(R(0x340) & 0xFF);
+  { static const char* cl = getenv("XBOX_CONSTLOG"); static int ncl = 0;   // XBOX_CONSTLOG=<combiner stages>: log the per-stage combiner constants of draws with that many stages (first 12)
+    if (cl && (uint32_t)atoi(cl) == fi.numStages && fi.texMode[0] == 1 && fi.texMode[1] == 1 && fi.texMode[2] == 0 && fi.texMode[3] == 1 && ncl < 6) { ++ncl;
+      Log("[constlog] fs %08x modes=%u,%u,%u,%u final-consts E=(%.2f %.2f %.2f %.2f) F=(%.2f %.2f %.2f %.2f) fog=(%.2f %.2f %.2f %.2f)", (unsigned)fhash, fi.texMode[0], fi.texMode[1], fi.texMode[2], fi.texMode[3], fb[64], fb[65], fb[66], fb[67], fb[68], fb[69], fb[70], fb[71], fb[72], fb[73], fb[74], fb[75]);
+      for (uint32_t k = 0; k < fi.numStages && k < 8; k++) Log("[constlog]   stage %u: c0=(%.3f %.3f %.3f %.3f) c1=(%.3f %.3f %.3f %.3f)", k, fb[4 * k], fb[4 * k + 1], fb[4 * k + 2], fb[4 * k + 3], fb[32 + 4 * k], fb[33 + 4 * k], fb[34 + 4 * k], fb[35 + 4 * k]); } }
   for (int t = 0; t < 4; t++) if (selfSnap[t]) colorSnap[t] = SnapshotColor(rt);
   for (int t = 0; t < 4; t++) if (rtTex[t] && !selfSnap[t] && rtTex[t]->color.layout != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {   // sampled render target: leave rendering, make its colour image shader-readable
     EndRendering(); Barrier(fr.cb, rtTex[t]->color, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT); }
@@ -530,10 +551,15 @@ static void GpuDrawImpl(uint32_t prim, const SoftVertex* verts, size_t n) {
     if (logNow) { g_drawLogFlip = g_dbgFlips;
       char tx[256]; tx[0] = 0; size_t tp = 0;
       for (int t = 0; t < 4; t++) if (fi.texPresent[t] && tp < 200) tp += snprintf(tx + tp, sizeof tx - tp, " t%d:f%02x%s%dx%d", t, (R(0x1B04 + 64 * t) >> 8) & 0xFF, fi.texCube[t] ? "C" : (rtTex[t] || selfSnap[t] ? "R" : ""), tex[t] ? tex[t]->img.w : 0, tex[t] ? tex[t]->img.h : 0);
+      { static const char* td = getenv("XBOX_DRAWTEX");   // XBOX_DRAWTEX=<first>-<last>: with the draw log on, write the textures bound to draws <first>..<last> of the logged frame (draw_<n>_t<stage>.bmp)
+        int ta = 0, tb = 0; if (td && sscanf(td, "%d-%d", &ta, &tb) == 2 && g_frameDraws >= ta && g_frameDraws <= tb)
+          for (int t = 0; t < 4; t++) if (fi.texPresent[t] && !fi.texCube[t] && !rtTex[t] && !selfSnap[t]) { std::vector<uint32_t> bgra; int w = 0, h = 0; uint64_t hh = 0; bool lin = false;
+            if (SoftDecodeTexture(t, &bgra, &w, &h, &hh, &lin) && w > 0 && h > 0) { char nm[80]; snprintf(nm, sizeof nm, "draw_%d_t%d.bmp", g_frameDraws, t); DumpBmp(nm, bgra.data(), w, h); } } }
       float bx0 = 0, by0 = 0, bx1 = 0, by1 = 0; bool hb = n <= 64 && SoftScreenBBox(verts, n, &bx0, &by0, &bx1, &by1);   // clip-space bounding box of small draws (HUD quads): compare machines
+      char af[160]; af[0] = 0; { size_t ap = 0; for (int ai = 0; ai < 16 && ap < 140; ai++) if ((used >> ai) & 1) { uint32_t ff = R(0x1760 + 4 * ai); ap += snprintf(af + ap, sizeof af - ap, " a%d:t%u/s%u/st%u", ai, ff & 15, (ff >> 4) & 15, ff >> 8); } }   // attribute formats: type / size / stride
       char bb[80]; bb[0] = 0; if (hb) snprintf(bb, sizeof bb, " bbox=(%.3f,%.3f)-(%.3f,%.3f) v0=(%.1f,%.1f,%.1f)", bx0, by0, bx1, by1, n ? verts[0].a[0][0] : 0.f, n ? verts[0].a[0][1] : 0.f, n ? verts[0].a[0][2] : 0.f);
-      Log("[drawlog] flip %d draw %d rt=%dx%d@%x prim=%u n=%zu vs=%08x fs=%08x modes=%u,%u,%u,%u stages=%u blend=%u(%x,%x) depth=%u/%u%s%s", g_dbgFlips, g_frameDraws, rt->w, rt->h, rt->offset, prim, n, (unsigned)vhash, (unsigned)fhash,
-          fi.texMode[0], fi.texMode[1], fi.texMode[2], fi.texMode[3], fi.numStages, R(0x304) != 0, R(0x344), R(0x348), R(0x30C) != 0, R(0x35C) != 0, tx, bb);
+      Log("[drawlog] flip %d draw %d rt=%dx%d@%x prim=%u n=%zu vs=%08x fs=%08x modes=%u,%u,%u,%u stages=%u blend=%u(%x,%x) depth=%u/%u(f%x) cmask=%08x used=%x%s%s%s", g_dbgFlips, g_frameDraws, rt->w, rt->h, rt->offset, prim, n, (unsigned)vhash, (unsigned)fhash,
+          fi.texMode[0], fi.texMode[1], fi.texMode[2], fi.texMode[3], fi.numStages, R(0x304) != 0, R(0x344), R(0x348), R(0x30C) != 0, R(0x35C) != 0, R(0x354), R(0x358), (unsigned)used, tx, af, bb);
     }
   }
   PipeKey pk{}; pk.vs = vhash; pk.fs = fhash; pk.usedMask = used; pk.blendEnable = R(0x304) != 0; pk.sfac = R(0x344); pk.dfac = R(0x348); pk.eq = R(0x350); pk.depthTest = R(0x30C) != 0; pk.depthFunc = R(0x354); pk.depthMask = R(0x35C) != 0;
