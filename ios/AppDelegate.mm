@@ -100,7 +100,7 @@ extern "C" void ReforgedSetMetalLayer(void* layer);
   }
   if (envNote) setenv("REFORGED_ENV_NOTE", [envNote UTF8String], 1);
   // Diagnostics on by default for now (a reforged.env setting wins): every 2400 frames, log two frames draw by draw and save their images.
-  setenv("XBOX_DRAWLOG", "every=2400", 0); setenv("XBOX_FRAMEDUMP", "sync", 0); setenv("XBOX_DARKWATCH", "1", 0);
+  setenv("XBOX_DRAWLOG", "every=2400", 0); setenv("XBOX_FRAMEDUMP", "sync", 0); setenv("XBOX_DARKWATCH", "1", 0); setenv("XBOX_DRAWTEX", "size:103x19", 0);
   setenv("XBOX_TITLE_DIR", [[bundle stringByAppendingPathComponent:@"title"] UTF8String], 1);
   if (!haveModule) { self.label.text = @"Reforged\nthe game module is missing"; return YES; }
   setenv("XBOX_LIFT", "1", 1);

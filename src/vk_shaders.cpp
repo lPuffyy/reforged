@@ -31,7 +31,7 @@ std::vector<uint32_t> GenVertexShader(const uint32_t* prog, uint32_t start, uint
   uint32_t inVar[16] = {};
   for (int i = 0; i < 16; i++) if (mask & (1u << i)) { inVar[i] = s.Variable(tV4, Spv::Input); s.Decorate(inVar[i], Spv::D_Location, {(uint32_t)i}); iface.push_back(inVar[i]); }
   // outputs: gl_Position block + varyings
-  uint32_t pv = s.TStruct({tV4}); s.Decorate(pv, Spv::D_Block); s.MemberDecorate(pv, 0, Spv::D_BuiltIn, {Spv::B_Position});
+  uint32_t pv = s.TStruct({tV4}); s.Decorate(pv, Spv::D_Block); s.MemberDecorate(pv, 0, Spv::D_BuiltIn, {Spv::B_Position}); s.MemberDecorate(pv, 0, Spv::D_Invariant);   // identical position math in every vertex program, so a later pass can test EQUAL against an earlier pass's depth
   uint32_t posOut = s.Variable(pv, Spv::Output); iface.push_back(posOut);
   uint32_t varying[7];  // d0, d1, t0..t3, fog
   for (int i = 0; i < 7; i++) { varying[i] = s.Variable(tV4, Spv::Output); s.Decorate(varying[i], Spv::D_Location, {(uint32_t)i}); iface.push_back(varying[i]); }
@@ -379,7 +379,7 @@ std::vector<uint32_t> GenSimpleFragmentShader() {
 std::vector<uint32_t> GenSimpleVertexShader(uint32_t* usedInputs) {
   Spv s; uint32_t tF = s.TFloat(), tV4 = s.TVec4(); *usedInputs = 1; std::vector<uint32_t> iface;
   uint32_t in0 = s.Variable(tV4, Spv::Input); s.Decorate(in0, Spv::D_Location, {0}); iface.push_back(in0);
-  uint32_t pv = s.TStruct({tV4}); s.Decorate(pv, Spv::D_Block); s.MemberDecorate(pv, 0, Spv::D_BuiltIn, {Spv::B_Position});
+  uint32_t pv = s.TStruct({tV4}); s.Decorate(pv, Spv::D_Block); s.MemberDecorate(pv, 0, Spv::D_BuiltIn, {Spv::B_Position}); s.MemberDecorate(pv, 0, Spv::D_Invariant);   // identical position math in every vertex program, so a later pass can test EQUAL against an earlier pass's depth
   uint32_t posOut = s.Variable(pv, Spv::Output); iface.push_back(posOut);
   uint32_t vary[7]; for (int i = 0; i < 7; i++) { vary[i] = s.Variable(tV4, Spv::Output); s.Decorate(vary[i], Spv::D_Location, {(uint32_t)i}); iface.push_back(vary[i]); }
   s.BeginMain(); uint32_t v = s.Load(tV4, in0);

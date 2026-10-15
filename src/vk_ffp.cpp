@@ -19,7 +19,7 @@ std::vector<uint32_t> GenFixedVertexShader(const FfState& st, uint32_t* usedInpu
   uint32_t ubVar = s.Variable(ub, Spv::Uniform); s.Decorate(ubVar, Spv::D_DescriptorSet, {0}); s.Decorate(ubVar, Spv::D_Binding, {0});
   std::vector<uint32_t> iface; uint32_t inVar[16] = {};
   for (int i = 0; i < 16; i++) if (mask & (1u << i)) { inVar[i] = s.Variable(tV4, Spv::Input); s.Decorate(inVar[i], Spv::D_Location, {(uint32_t)i}); iface.push_back(inVar[i]); }
-  uint32_t pv = s.TStruct({tV4}); s.Decorate(pv, Spv::D_Block); s.MemberDecorate(pv, 0, Spv::D_BuiltIn, {Spv::B_Position});
+  uint32_t pv = s.TStruct({tV4}); s.Decorate(pv, Spv::D_Block); s.MemberDecorate(pv, 0, Spv::D_BuiltIn, {Spv::B_Position}); s.MemberDecorate(pv, 0, Spv::D_Invariant);   // identical position math in every vertex program, so a later pass can test EQUAL against an earlier pass's depth
   uint32_t posOut = s.Variable(pv, Spv::Output); iface.push_back(posOut);
   uint32_t varying[7]; for (int i = 0; i < 7; i++) { varying[i] = s.Variable(tV4, Spv::Output); s.Decorate(varying[i], Spv::D_Location, {(uint32_t)i}); iface.push_back(varying[i]); }
   s.BeginMain();

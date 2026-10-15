@@ -25,7 +25,7 @@ struct Spv {
   enum Glsl { G_Trunc = 3, G_FAbs = 4, G_FSign = 6, G_Floor = 8, G_Fract = 10, G_Pow = 26, G_Exp2 = 29, G_Log2 = 30, G_Sqrt = 31, G_InverseSqrt = 32,
               G_FMin = 37, G_FMax = 40, G_FClamp = 43, G_Normalize = 69, G_SClamp = 45, G_Length = 66 };
   enum Storage { Input = 1, Uniform = 2, Output = 3, Private = 6, Function = 7, UniformConstant = 0 };
-  enum Deco { D_Block = 2, D_BuiltIn = 11, D_Location = 30, D_Binding = 33, D_DescriptorSet = 34, D_Offset = 35, D_ArrayStride = 6, D_Flat = 14, D_NoPerspective = 13 };
+  enum Deco { D_Block = 2, D_BuiltIn = 11, D_Location = 30, D_Binding = 33, D_DescriptorSet = 34, D_Offset = 35, D_ArrayStride = 6, D_Flat = 14, D_NoPerspective = 13, D_Invariant = 18 };
   enum BuiltIn { B_Position = 0 };
 
   std::vector<uint32_t> caps, ext, mem, entry, modes, annot, types, body;

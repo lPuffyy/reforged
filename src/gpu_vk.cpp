@@ -360,7 +360,7 @@ VkPipeline GetPipeline(const PipeKey& k, const Shader& vs, const Shader& fs) {
   VkPipelineDepthStencilStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO}; ds.depthTestEnable = k.depthTest; ds.depthWriteEnable = k.depthMask && k.depthTest; const bool crossZ = (k.depthFunc & 0x10000) != 0; const uint32_t zfunc = k.depthFunc & 0xFFFF; ds.depthCompareOp = (VkCompareOp)(zfunc >= 0x200 ? zfunc - 0x200 : 7);
   // An EQUAL depth test (a second material pass over the same mesh) needs bit-identical depth from two different vertex programs; GPUs do not guarantee that, so test "less or equal" with a small pull toward the camera.
   { static const bool eqFix = getenv("XBOX_NO_EQFIX") == nullptr;
-    if (eqFix && zfunc == 0x202) { ds.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL; rs.depthBiasEnable = VK_TRUE; rs.depthBiasConstantFactor = -64.f; rs.depthBiasSlopeFactor = -2.f; rs.depthBiasClamp = 0.f; } }
+    if (eqFix && zfunc == 0x202) { ds.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL; rs.depthBiasEnable = VK_TRUE; rs.depthBiasConstantFactor = crossZ ? -256.f : -64.f; rs.depthBiasSlopeFactor = -2.f; rs.depthBiasClamp = 0.f; } }
   // The same effect for a pass that tests against depth another colour surface wrote with a different vertex program (a depth pre-pass): pull slightly toward the camera so rounding differences do not reject the surface
   { static const bool xzFix = getenv("XBOX_NO_XZFIX") == nullptr; if (xzFix && crossZ && zfunc != 0x202 && (zfunc == 0x201 || zfunc == 0x203)) { rs.depthBiasEnable = VK_TRUE; rs.depthBiasConstantFactor = -64.f; rs.depthBiasSlopeFactor = 0.f; rs.depthBiasClamp = 0.f; } }
   VkPipelineColorBlendAttachmentState ba{}; ba.blendEnable = k.blendEnable; ba.srcColorBlendFactor = ba.srcAlphaBlendFactor = BF(k.sfac); ba.dstColorBlendFactor = ba.dstAlphaBlendFactor = BF(k.dfac); ba.colorBlendOp = ba.alphaBlendOp = BO(k.eq);
@@ -567,6 +567,10 @@ static void GpuDrawImpl(uint32_t prim, const SoftVertex* verts, size_t n) {
       char tx[256]; tx[0] = 0; size_t tp = 0;
       for (int t = 0; t < 4; t++) if (fi.texPresent[t] && tp < 200) tp += snprintf(tx + tp, sizeof tx - tp, " t%d:f%02x%s%dx%d", t, (R(0x1B04 + 64 * t) >> 8) & 0xFF, fi.texCube[t] ? "C" : (rtTex[t] || selfSnap[t] ? "R" : ""), tex[t] ? tex[t]->img.w : 0, tex[t] ? tex[t]->img.h : 0);
       { static const char* td = getenv("XBOX_DRAWTEX");   // XBOX_DRAWTEX=<first>-<last>: with the draw log on, write the textures bound to draws <first>..<last> of the logged frame (draw_<n>_t<stage>.bmp)
+        // XBOX_DRAWTEX=size:<w>x<h>: instead write up to six textures of exactly that size per logged frame
+        { int sw = 0, sh = 0; static int sc = 0, sf = -1; if (td && sscanf(td, "size:%dx%d", &sw, &sh) == 2) { if (sf != g_dbgFlips) { sf = g_dbgFlips; sc = 0; }
+          for (int t = 0; t < 4 && sc < 6; t++) if (fi.texPresent[t] && !fi.texCube[t] && !rtTex[t] && !selfSnap[t]) { std::vector<uint32_t> bgra; int w = 0, h = 0; uint64_t hh = 0; bool lin = false;
+            if (SoftDecodeTexture(t, &bgra, &w, &h, &hh, &lin) && w == sw && h == sh) { char nm[80]; snprintf(nm, sizeof nm, "tex%dx%d_draw%d_t%d_f%02x.bmp", w, h, g_frameDraws, t, (R(0x1B04 + 64 * t) >> 8) & 0xFF); DumpBmp(nm, bgra.data(), w, h); ++sc; } } }
         int ta = 0, tb = 0; if (td && sscanf(td, "%d-%d", &ta, &tb) == 2 && g_frameDraws >= ta && g_frameDraws <= tb)
           for (int t = 0; t < 4; t++) if (fi.texPresent[t] && !fi.texCube[t] && !rtTex[t] && !selfSnap[t]) { std::vector<uint32_t> bgra; int w = 0, h = 0; uint64_t hh = 0; bool lin = false;
             if (SoftDecodeTexture(t, &bgra, &w, &h, &hh, &lin) && w > 0 && h > 0) { char nm[80]; snprintf(nm, sizeof nm, "draw_%d_t%d.bmp", g_frameDraws, t); DumpBmp(nm, bgra.data(), w, h); } } }
