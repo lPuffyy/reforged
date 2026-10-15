@@ -188,6 +188,28 @@ std::vector<uint32_t> GenFragmentShader(const FsInfo& f) {
     uint32_t smp;
     if (f.texCube[i]) { uint32_t dir = s.Shuffle(tV3, tc, tc, {0, 1, 2}); uint32_t imgc = s.Load(tSampCube, sampVar[i]); smp = s.Emit(Spv::OpImageSampleImplicitLod, tV4, {imgc, dir}); }   // cube map: (s,t,r) is the lookup direction
     else { uint32_t img = s.Load(tSamp, sampVar[i]); smp = s.Emit(Spv::OpImageSampleImplicitLod, tV4, {img, uv}); }
+    // Dot-product (bump / reflection) stage modes: stages 1..3 take the dot product of their texture coordinate with the signed-expanded colour of stage 0 (a normal map).
+    // 9 DOT_ST: 2D lookup at (dot of stage i-1, dot of stage i); 11 DOT_RFLCT_DIFF: cube lookup along the normal N = (dot1, dot2, dot3);
+    // 12 DOT_RFLCT_SPEC: cube lookup along the reflection of the eye vector E = (q1, q2, q3) about N.  (17 DOTPRODUCT stages only feed the later ones.)
+    if (i >= 1 && (f.texMode[i] == 9 || f.texMode[i] == 11 || f.texMode[i] == 12)) {
+      uint32_t t0 = s.Load(tV4, reg[8]), rgb0 = s.Shuffle(tV3, t0, t0, {0, 1, 2});
+      uint32_t n0 = s.Emit(Spv::OpFSub, tV3, {s.Emit(Spv::OpFMul, tV3, {rgb0, s.CVec(3, s.CFloat(2.f))}), s.CVec(3, one)});
+      auto dotAt = [&](int k) { uint32_t tk = s.Load(tV4, inT[k]); return s.Emit(Spv::OpDot, tF, {s.Shuffle(tV3, tk, tk, {0, 1, 2}), n0}); };
+      if (f.texMode[i] == 9) {
+        uint32_t st = s.Emit(Spv::OpCompositeConstruct, s.TVec(tF, 2), {dotAt(i - 1), dotAt(i)});
+        smp = s.Emit(Spv::OpImageSampleImplicitLod, tV4, {s.Load(tSamp, sampVar[i]), st});
+      } else if (f.texCube[i]) {
+        uint32_t nrm = s.Emit(Spv::OpCompositeConstruct, tV3, {dotAt(1), dotAt(2), dotAt(3)}), dir = nrm;
+        if (f.texMode[i] == 12) {
+          uint32_t q1 = comp(s.Load(tV4, inT[1]), 3), q2 = comp(s.Load(tV4, inT[2]), 3), q3 = comp(s.Load(tV4, inT[3]), 3);
+          uint32_t eye = s.Emit(Spv::OpCompositeConstruct, tV3, {q1, q2, q3});
+          uint32_t ne = s.Emit(Spv::OpDot, tF, {nrm, eye}), nn = s.Emit(Spv::OpDot, tF, {nrm, nrm});
+          uint32_t k = s.Emit(Spv::OpFDiv, tF, {s.Emit(Spv::OpFMul, tF, {s.CFloat(2.f), ne}), s.Glsl2(tF, Spv::G_FMax, nn, s.CFloat(1e-6f))});
+          dir = s.Emit(Spv::OpFSub, tV3, {s.Emit(Spv::OpVectorTimesScalar, tV3, {nrm, k}), eye});
+        }
+        smp = s.Emit(Spv::OpImageSampleImplicitLod, tV4, {s.Load(tSampCube, sampVar[i]), dir});
+      }
+    }
     if (f.texDepth[i]) {   // depth image sample .x in [0,1] -> 24-bit integer -> Xbox Z24S8-as-ARGB8 byte channels
       uint32_t d = comp(smp, 0), k24 = s.CFloat(16777215.f), k65536 = s.CFloat(65536.f), k256 = s.CFloat(256.f), k255 = s.CFloat(255.f);
       uint32_t z = s.Glsl1(tF, Spv::G_Floor, s.Emit(Spv::OpFAdd, tF, {s.Emit(Spv::OpFMul, tF, {d, k24}), half}));

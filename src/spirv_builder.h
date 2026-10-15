@@ -17,7 +17,7 @@ struct Spv {
     OpFunction = 54, OpFunctionParameter = 55, OpFunctionEnd = 56, OpFunctionCall = 57, OpVariable = 59, OpLoad = 61, OpStore = 62, OpAccessChain = 65,
     OpDecorate = 71, OpMemberDecorate = 72, OpVectorShuffle = 79, OpCompositeConstruct = 80, OpCompositeExtract = 81, OpCompositeInsert = 82,
     OpImageSampleImplicitLod = 87, OpImageSampleProjImplicitLod = 91, OpImageQuerySizeLod = 103, OpConvertFToS = 110, OpConvertSToF = 111,
-    OpFNegate = 127, OpFAdd = 129, OpFSub = 131, OpFMul = 133, OpFDiv = 136, OpDot = 148, OpSelect = 169, OpLogicalNot = 168, OpLogicalOr = 166,
+    OpFNegate = 127, OpVectorTimesScalar = 142, OpFAdd = 129, OpFSub = 131, OpFMul = 133, OpFDiv = 136, OpDot = 148, OpSelect = 169, OpLogicalNot = 168, OpLogicalOr = 166,
     OpFOrdEqual = 180, OpFOrdLessThan = 184, OpFOrdGreaterThan = 186, OpFOrdLessThanEqual = 188, OpFOrdGreaterThanEqual = 190, OpFOrdNotEqual = 182,
     OpLabel = 248, OpBranch = 249, OpKill = 252, OpReturn = 253, OpSNegate = 126, OpIAdd = 128, OpSLessThan = 177, OpSGreaterThan = 173, OpExtInstDummy = 0,
   };
