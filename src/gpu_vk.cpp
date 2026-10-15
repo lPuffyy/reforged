@@ -69,6 +69,7 @@ VkInstance g_inst; VkPhysicalDevice g_phys; VkDevice g_dev; VkQueue g_queue; uin
 std::vector<VkImage> g_swapImages; std::vector<VkImageLayout> g_swapLayouts;
 VkPhysicalDeviceMemoryProperties g_memProps; VkPhysicalDeviceProperties g_props;
 VkDescriptorSetLayout g_dsl; VkPipelineLayout g_playout; VkSampler g_samplers[2][2][2];
+int g_darkArm = -1;   // XBOX_DARKWATCH: flip at which a sudden black screen armed the draw log and frame dump
 int g_drawLogFlip = -100;   // the last flip whose draws were logged (XBOX_FRAMEDUMP=sync dumps the images of those same flips)
 uint32_t g_startMs = (uint32_t)plat::TickMs();   // process start, for the elapsed time in log lines
 VkPipelineCache g_pcache = VK_NULL_HANDLE; size_t g_pcacheSaved = 0;   // persisted in pipeline_cache.bin (working directory): shaders compile once, not on every launch
@@ -552,8 +553,9 @@ static void GpuDrawImpl(uint32_t prim, const SoftVertex* verts, size_t n) {
     static const char* dl = getenv("XBOX_DRAWLOG"); static int dl0 = -1, dln = 0, every = 0, armedAt = -1; static bool parsed = false;
     if (dl && !parsed) { parsed = true; if (!strncmp(dl, "every=", 6)) every = atoi(dl + 6); else if (!strcmp(dl, "file")) every = -1; else sscanf(dl, "%d,%d", &dl0, &dln); }
     if (dl && every == -1 && armedAt < 0) { if (FILE* ff = fopen("drawlog.flag", "rb")) { fclose(ff); remove("drawlog.flag"); armedAt = g_dbgFlips; } }   // file mode: create drawlog.flag to log the next two flips
-    bool logNow = dl && ((every > 0 && g_dbgFlips > 0 && (g_dbgFlips % every) < 2) || (every == -1 && armedAt >= 0 && g_dbgFlips >= armedAt && g_dbgFlips < armedAt + 2) || (every == 0 && g_dbgFlips >= dl0 && g_dbgFlips < dl0 + dln));
+    bool logNow = dl && ((g_darkArm >= 0 && g_dbgFlips >= g_darkArm && g_dbgFlips < g_darkArm + 2) || (every > 0 && g_dbgFlips > 0 && (g_dbgFlips % every) < 2) || (every == -1 && armedAt >= 0 && g_dbgFlips >= armedAt && g_dbgFlips < armedAt + 2) || (every == 0 && g_dbgFlips >= dl0 && g_dbgFlips < dl0 + dln));
     if (every == -1 && armedAt >= 0 && g_dbgFlips >= armedAt + 2) armedAt = -1;
+    if (g_darkArm >= 0 && g_dbgFlips >= g_darkArm + 40) g_darkArm = -1;   // re-arm the watch after a while
     if (logNow) { g_drawLogFlip = g_dbgFlips;
       char tx[256]; tx[0] = 0; size_t tp = 0;
       for (int t = 0; t < 4; t++) if (fi.texPresent[t] && tp < 200) tp += snprintf(tx + tp, sizeof tx - tp, " t%d:f%02x%s%dx%d", t, (R(0x1B04 + 64 * t) >> 8) & 0xFF, fi.texCube[t] ? "C" : (rtTex[t] || selfSnap[t] ? "R" : ""), tex[t] ? tex[t]->img.w : 0, tex[t] ? tex[t]->img.h : 0);
@@ -654,8 +656,8 @@ static void GpuFlipImpl() {
   sb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}; sb.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT; vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &sb);
   VkImageBlit bl{}; bl.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}; bl.srcOffsets[1] = {g_rt->w, g_rt->h, 1}; bl.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}; bl.dstOffsets[1] = {(int)g_swapExtent.width, (int)g_swapExtent.height, 1};
   vkCmdBlitImage(cb, rtc.img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, g_swapImages[ix], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bl, VK_FILTER_LINEAR);
-  const uint8_t* lumPtr = nullptr; int lumW = g_rt->w, lumH = g_rt->h; static bool lumOn = getenv("XBOX_LUMLOG") != nullptr;   // XBOX_LUMLOG=1: read the presented image back and log its mean brightness per flip (with the draw cap), for automated bisection
-  if (lumOn) { uint8_t* dst; size_t off = RingAlloc((size_t)lumW * lumH * 4, 16, &dst); VkBufferImageCopy bc{}; bc.bufferOffset = off; bc.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}; bc.imageExtent = {(uint32_t)lumW, (uint32_t)lumH, 1}; vkCmdCopyImageToBuffer(cb, rtc.img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, fr.ring.b, 1, &bc); lumPtr = dst; }
+  const uint8_t* lumPtr = nullptr; int lumW = g_rt->w, lumH = g_rt->h; static bool lumOn = getenv("XBOX_LUMLOG") != nullptr; static const bool darkWatch = getenv("XBOX_DARKWATCH") != nullptr; const bool darkNow = darkWatch && g_dbgFlips % 15 == 0 && g_darkArm < 0;   // XBOX_LUMLOG=1: read the presented image back and log its mean brightness per flip (with the draw cap), for automated bisection
+  if (lumOn || darkNow) { uint8_t* dst; size_t off = RingAlloc((size_t)lumW * lumH * 4, 16, &dst); VkBufferImageCopy bc{}; bc.bufferOffset = off; bc.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}; bc.imageExtent = {(uint32_t)lumW, (uint32_t)lumH, 1}; vkCmdCopyImageToBuffer(cb, rtc.img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, fr.ring.b, 1, &bc); lumPtr = dst; }
   if (g_pcache && g_dbgFlips > 0 && g_dbgFlips % 600 == 0) {   // write the pipeline cache back when it has grown
     size_t sz = 0; if (vkGetPipelineCacheData(g_dev, g_pcache, &sz, nullptr) == VK_SUCCESS && sz > g_pcacheSaved + 4096) {
       std::vector<uint8_t> data(sz); if (vkGetPipelineCacheData(g_dev, g_pcache, &sz, data.data()) == VK_SUCCESS) {
@@ -690,7 +692,9 @@ static void GpuFlipImpl() {
   VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO}; si.waitSemaphoreCount = 1; si.pWaitSemaphores = &fr.imageAvail; si.pWaitDstStageMask = &wait; si.commandBufferCount = 1; si.pCommandBuffers = &cb; si.signalSemaphoreCount = 1; si.pSignalSemaphores = &fr.renderDone;
   vkResetFences(g_dev, 1, &fr.fence); CHK(vkQueueSubmit(g_queue, 1, &si, fr.fence));
   if (!dumpReqs.empty()) { vkWaitForFences(g_dev, 1, &fr.fence, VK_TRUE, ~0ull); for (auto& q : dumpReqs) WriteDump(g_dbgFlips, q); }
-  if (lumPtr) { vkWaitForFences(g_dev, 1, &fr.fence, VK_TRUE, ~0ull); double sum = 0; size_t n = (size_t)lumW * lumH; for (size_t i = 0; i < n; i += 7) sum += lumPtr[i * 4] + lumPtr[i * 4 + 1] + lumPtr[i * 4 + 2]; Log("[lum] flip %d cap %d tailK %d ovCap %d lastframe-draws %d mean %.2f", g_dbgFlips, g_capSweep, g_tailK, g_ovCap, g_lastFrameDraws, sum / (n / 7 + 1) / 3); }
+  if (lumPtr) { vkWaitForFences(g_dev, 1, &fr.fence, VK_TRUE, ~0ull); double sum = 0; size_t n = (size_t)lumW * lumH; for (size_t i = 0; i < n; i += 7) sum += lumPtr[i * 4] + lumPtr[i * 4 + 1] + lumPtr[i * 4 + 2];
+    if (darkNow) { static double prev = 0; static int caps = 0; double m = sum / (n / 7 + 1) / 3; if (prev >= 20 && m < 8 && caps < 4) { ++caps; g_darkArm = g_dbgFlips + 1; Log("[dark] screen went from mean %.1f to %.1f at flip %d: logging the next two frames", prev, m, g_dbgFlips); } prev = m; }
+    if (lumOn) Log("[lum] flip %d cap %d tailK %d ovCap %d lastframe-draws %d mean %.2f", g_dbgFlips, g_capSweep, g_tailK, g_ovCap, g_lastFrameDraws, sum / (n / 7 + 1) / 3); }
   VkPresentInfoKHR pi{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR}; pi.waitSemaphoreCount = 1; pi.pWaitSemaphores = &fr.renderDone; pi.swapchainCount = 1; pi.pSwapchains = &g_swap; pi.pImageIndices = &ix; vkQueuePresentKHR(g_queue, &pi);
   g_fi ^= 1; ++g_frameNo; g_rendering = false;
 }
