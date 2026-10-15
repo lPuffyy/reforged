@@ -273,6 +273,7 @@ std::vector<std::string> ListDir(const char* dir, const char* pattern) {
 void* LoadLib(const char* name) { return dlopen(name, RTLD_NOW | RTLD_LOCAL); }
 void* LibSym(void* lib, const char* name) { return dlsym(lib, name); }
 
+#ifndef __APPLE__   // Apple platforms have a real backend (plat_apple.mm)
 struct AudioCtx { uint32_t rate, frames; AudioFn fn; void* user; };
 static uint32_t AudioThread(void* p) {
   AudioCtx c = *(AudioCtx*)p; delete (AudioCtx*)p;
@@ -280,6 +281,7 @@ static uint32_t AudioThread(void* p) {
   for (;;) { c.fn(buf.data(), c.user); next += step; std::this_thread::sleep_until(next); }   // no device: consume at real-time pace so the game's audio clock behaves
 }
 bool AudioOutStart(uint32_t rate, uint32_t frames, uint32_t, AudioFn fn, void* user) { ThreadSpawn(AudioThread, new AudioCtx{rate, frames, fn, user}); return true; }
+#endif
 
 void SetEnv(const char* name, const char* value) { setenv(name, value, 1); }
 bool SpawnSelf(const std::vector<std::string>& args) {

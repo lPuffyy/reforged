@@ -134,6 +134,13 @@ jobs:
         run: |
           git clone --depth 1 --branch v1.3.280 https://github.com/KhronosGroup/Vulkan-Headers.git "$RUNNER_TEMP/vk-headers"
           git clone --depth 1 --branch v1.8.0 https://github.com/DLTcollab/sse2neon.git "$RUNNER_TEMP/sse2neon"
+      - name: What the MoltenVK iOS package contains
+        shell: bash
+        run: |
+          curl -sL -o "$RUNNER_TEMP/MoltenVK-ios.tar" https://github.com/KhronosGroup/MoltenVK/releases/download/v1.4.2/MoltenVK-ios.tar
+          shasum -a 256 "$RUNNER_TEMP/MoltenVK-ios.tar"
+          list=$(tar -tf "$RUNNER_TEMP/MoltenVK-ios.tar" | grep -iE "dylib|\.a$|xcframework/[^/]+/$|Info.plist|LICENSE" | head -40 | awk '{printf "%s%%0A", $0}')
+          echo "::notice title=MoltenVK iOS package::$list"
       - name: Build, package and run in the Simulator
         shell: bash
         run: |
