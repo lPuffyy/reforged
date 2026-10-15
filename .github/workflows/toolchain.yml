@@ -107,3 +107,19 @@ jobs:
           gh release delete toolchain -y --cleanup-tag || true
           gh release create toolchain toolchain-*.zip toolchain-*.zip.sig --title "Toolchain pack" \
             --notes "Compiler toolchain (LLVM $LLVM_VERSION: clang and lld, unmodified) and symbol scanner (XbSymbolDatabase, MIT) used by the companion tool. Signed with the project release key. Licenses are inside each pack."
+
+  # Unsigned preview of the packs (for testing the companion with --toolchain before the release key exists).
+  preview:
+    if: github.event_name == 'push'
+    needs: pack
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: toolchain-*
+          merge-multiple: true
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete toolchain-preview -y --cleanup-tag --repo "$GITHUB_REPOSITORY" || true
+          gh release create toolchain-preview toolchain-*.zip --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease --title "Toolchain preview (unsigned)"             --notes "Unsigned packs for testing with --toolchain. Contains LLVM (unmodified) and the symbol scanner."
