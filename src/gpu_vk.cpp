@@ -36,7 +36,7 @@ bool SoftDecodeTexture(int stage, std::vector<uint32_t>* bgra, int* w, int* h, u
   X(vkCreateImage) X(vkDestroyImage) X(vkGetImageMemoryRequirements) X(vkBindImageMemory) X(vkCreateImageView) X(vkDestroyImageView) \
   X(vkCreateSampler) X(vkDestroySampler) X(vkCreateShaderModule) X(vkDestroyShaderModule) X(vkCreateDescriptorSetLayout) X(vkCreatePipelineLayout) \
   X(vkCreateDescriptorPool) X(vkDestroyDescriptorPool) X(vkResetDescriptorPool) X(vkAllocateDescriptorSets) X(vkUpdateDescriptorSets) \
-  X(vkCreateGraphicsPipelines) X(vkDestroyPipeline) X(vkCreateCommandPool) X(vkResetCommandPool) X(vkAllocateCommandBuffers) X(vkBeginCommandBuffer) X(vkEndCommandBuffer) \
+  X(vkCreatePipelineCache) X(vkGetPipelineCacheData) X(vkDestroyPipelineCache) X(vkCreateGraphicsPipelines) X(vkDestroyPipeline) X(vkCreateCommandPool) X(vkResetCommandPool) X(vkAllocateCommandBuffers) X(vkBeginCommandBuffer) X(vkEndCommandBuffer) \
   X(vkCreateFence) X(vkWaitForFences) X(vkResetFences) X(vkCreateSemaphore) X(vkQueueSubmit) X(vkDeviceWaitIdle) \
   X(vkCmdPipelineBarrier) X(vkCmdCopyBufferToImage) X(vkCmdCopyImage) X(vkCmdCopyImageToBuffer) X(vkCmdBlitImage) X(vkCmdClearAttachments) X(vkCmdBindPipeline) X(vkCmdBindDescriptorSets) X(vkCmdBindVertexBuffers) \
   X(vkCmdBindIndexBuffer) X(vkCmdDrawIndexed) X(vkCmdSetViewport) X(vkCmdSetScissor) X(vkCmdSetBlendConstants) X(vkCmdBeginRendering) X(vkCmdEndRendering) \
@@ -69,6 +69,7 @@ VkInstance g_inst; VkPhysicalDevice g_phys; VkDevice g_dev; VkQueue g_queue; uin
 std::vector<VkImage> g_swapImages; std::vector<VkImageLayout> g_swapLayouts;
 VkPhysicalDeviceMemoryProperties g_memProps; VkPhysicalDeviceProperties g_props;
 VkDescriptorSetLayout g_dsl; VkPipelineLayout g_playout; VkSampler g_samplers[2][2][2];
+VkPipelineCache g_pcache = VK_NULL_HANDLE; size_t g_pcacheSaved = 0;   // persisted in pipeline_cache.bin (working directory): shaders compile once, not on every launch
 Frame g_frames[2]; int g_fi = 0; uint64_t g_frameNo = 0; bool g_ok = false, g_tried = false;
 std::vector<RenderTarget*> g_rts; RenderTarget* g_rt = nullptr; bool g_rendering = false;
 uint32_t g_ubAlign = 256;
@@ -156,6 +157,11 @@ bool InitVulkan() {
     f.ring = MakeBuf(96u << 20, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT, true);
     VkDescriptorPoolSize ps[2] = {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 16384}, {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 32768}};
     VkDescriptorPoolCreateInfo dpi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO}; dpi.maxSets = 8192; dpi.poolSizeCount = 2; dpi.pPoolSizes = ps; CHK(vkCreateDescriptorPool(g_dev, &dpi, nullptr, &f.dpool));
+  }
+  {   // pipeline cache: start from the file left by the last run (the driver ignores data that does not belong to this device or driver version)
+    std::vector<uint8_t> init; if (FILE* cf = fopen("pipeline_cache.bin", "rb")) { fseek(cf, 0, SEEK_END); long n = ftell(cf); fseek(cf, 0, SEEK_SET); if (n > 0 && n < (512l << 20)) { init.resize((size_t)n); if (fread(init.data(), 1, init.size(), cf) != init.size()) init.clear(); } fclose(cf); }
+    VkPipelineCacheCreateInfo pci{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO}; pci.initialDataSize = init.size(); pci.pInitialData = init.empty() ? nullptr : init.data();
+    if (vkCreatePipelineCache(g_dev, &pci, nullptr, &g_pcache) != VK_SUCCESS) g_pcache = VK_NULL_HANDLE; else { g_pcacheSaved = init.size(); Log("[vk] pipeline cache: %zu bytes loaded", init.size()); }
   }
   return true;
 }
@@ -327,7 +333,7 @@ VkPipeline GetPipeline(const PipeKey& k, const Shader& vs, const Shader& fs) {
   VkPipelineRenderingCreateInfo ri{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO}; ri.colorAttachmentCount = 1; ri.pColorAttachmentFormats = &colorFmt; ri.depthAttachmentFormat = VK_FORMAT_D32_SFLOAT;
   VkGraphicsPipelineCreateInfo pi{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO}; pi.pNext = &ri; pi.stageCount = 2; pi.pStages = st; pi.pVertexInputState = &vi; pi.pInputAssemblyState = &ia; pi.pViewportState = &vp; pi.pRasterizationState = &rs;
   pi.pMultisampleState = &ms; pi.pDepthStencilState = &ds; pi.pColorBlendState = &cb; pi.pDynamicState = &dy; pi.layout = g_playout;
-  VkPipeline p = VK_NULL_HANDLE; CHK(vkCreateGraphicsPipelines(g_dev, VK_NULL_HANDLE, 1, &pi, nullptr, &p)); g_pipes[k] = p; return p;
+  VkPipeline p = VK_NULL_HANDLE; CHK(vkCreateGraphicsPipelines(g_dev, g_pcache, 1, &pi, nullptr, &p)); g_pipes[k] = p; return p;
 }
 }  // namespace
 
@@ -568,6 +574,11 @@ static void GpuFlipImpl() {
   vkCmdBlitImage(cb, rtc.img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, g_swapImages[ix], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bl, VK_FILTER_LINEAR);
   const uint8_t* lumPtr = nullptr; int lumW = g_rt->w, lumH = g_rt->h; static bool lumOn = getenv("XBOX_LUMLOG") != nullptr;   // XBOX_LUMLOG=1: read the presented image back and log its mean brightness per flip (with the draw cap), for automated bisection
   if (lumOn) { uint8_t* dst; size_t off = RingAlloc((size_t)lumW * lumH * 4, 16, &dst); VkBufferImageCopy bc{}; bc.bufferOffset = off; bc.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}; bc.imageExtent = {(uint32_t)lumW, (uint32_t)lumH, 1}; vkCmdCopyImageToBuffer(cb, rtc.img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, fr.ring.b, 1, &bc); lumPtr = dst; }
+  if (g_pcache && g_dbgFlips > 0 && g_dbgFlips % 600 == 0) {   // write the pipeline cache back when it has grown
+    size_t sz = 0; if (vkGetPipelineCacheData(g_dev, g_pcache, &sz, nullptr) == VK_SUCCESS && sz > g_pcacheSaved + 4096) {
+      std::vector<uint8_t> data(sz); if (vkGetPipelineCacheData(g_dev, g_pcache, &sz, data.data()) == VK_SUCCESS) {
+        if (FILE* cf = fopen("pipeline_cache.tmp", "wb")) { fwrite(data.data(), 1, sz, cf); fclose(cf); remove("pipeline_cache.bin"); rename("pipeline_cache.tmp", "pipeline_cache.bin"); g_pcacheSaved = sz; Log("[vk] pipeline cache saved: %zu bytes", sz); } } }
+  }
   std::vector<DumpReq> dumpReqs;
   if (!FrameDumpDue(g_dbgFlips) && g_dbgFlips > 0 && g_dbgFlips % 300 == 0 && g_dbgFlips <= 12000) {   // always on: the presented image's mean colour every 300 flips (a black screen shows up in the log)
     uint8_t* dst; size_t off = RingAlloc((size_t)g_rt->w * g_rt->h * 4, 16, &dst);
