@@ -257,6 +257,7 @@ bool UploadTexture(int stage, TexEntry** out) {
 }
 
 // ---------------- render targets ----------------
+struct ZWriters { RenderTarget* cur = nullptr; RenderTarget* other = nullptr; }; static std::map<uint32_t, ZWriters> g_zWriters;   // per depth buffer address: the last colour surface that wrote it this frame, and the one before
 static std::map<uint64_t, Img*> g_sharedDepth;   // depth images by (zeta address, size)
 static Img* SharedDepth(int w, int h) {
   uint64_t dk = (uint64_t)R(0x214) << 32 | (uint32_t)(w << 16 | h); auto sd = g_sharedDepth.find(dk);
@@ -356,10 +357,12 @@ VkPipeline GetPipeline(const PipeKey& k, const Shader& vs, const Shader& fs) {
   rs.cullMode = !k.cull ? VK_CULL_MODE_NONE : (k.cull == 0x404 ? VK_CULL_MODE_FRONT_BIT : k.cull == 0x405 ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_FRONT_AND_BACK);
   rs.frontFace = k.front == 0x901 ? VK_FRONT_FACE_COUNTER_CLOCKWISE : VK_FRONT_FACE_CLOCKWISE;
   VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO}; ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-  VkPipelineDepthStencilStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO}; ds.depthTestEnable = k.depthTest; ds.depthWriteEnable = k.depthMask && k.depthTest; ds.depthCompareOp = (VkCompareOp)(k.depthFunc >= 0x200 ? k.depthFunc - 0x200 : 7);
+  VkPipelineDepthStencilStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO}; ds.depthTestEnable = k.depthTest; ds.depthWriteEnable = k.depthMask && k.depthTest; const bool crossZ = (k.depthFunc & 0x10000) != 0; const uint32_t zfunc = k.depthFunc & 0xFFFF; ds.depthCompareOp = (VkCompareOp)(zfunc >= 0x200 ? zfunc - 0x200 : 7);
   // An EQUAL depth test (a second material pass over the same mesh) needs bit-identical depth from two different vertex programs; GPUs do not guarantee that, so test "less or equal" with a small pull toward the camera.
   { static const bool eqFix = getenv("XBOX_NO_EQFIX") == nullptr;
-    if (eqFix && k.depthFunc == 0x202) { ds.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL; rs.depthBiasEnable = VK_TRUE; rs.depthBiasConstantFactor = -64.f; rs.depthBiasSlopeFactor = -2.f; rs.depthBiasClamp = 0.f; } }
+    if (eqFix && zfunc == 0x202) { ds.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL; rs.depthBiasEnable = VK_TRUE; rs.depthBiasConstantFactor = -64.f; rs.depthBiasSlopeFactor = -2.f; rs.depthBiasClamp = 0.f; } }
+  // The same effect for a pass that tests against depth another colour surface wrote with a different vertex program (a depth pre-pass): pull slightly toward the camera so rounding differences do not reject the surface
+  { static const bool xzFix = getenv("XBOX_NO_XZFIX") == nullptr; if (xzFix && crossZ && zfunc != 0x202 && (zfunc == 0x201 || zfunc == 0x203)) { rs.depthBiasEnable = VK_TRUE; rs.depthBiasConstantFactor = -64.f; rs.depthBiasSlopeFactor = 0.f; rs.depthBiasClamp = 0.f; } }
   VkPipelineColorBlendAttachmentState ba{}; ba.blendEnable = k.blendEnable; ba.srcColorBlendFactor = ba.srcAlphaBlendFactor = BF(k.sfac); ba.dstColorBlendFactor = ba.dstAlphaBlendFactor = BF(k.dfac); ba.colorBlendOp = ba.alphaBlendOp = BO(k.eq);
   ba.colorWriteMask = ((k.colorMask & 0x00010000) ? VK_COLOR_COMPONENT_R_BIT : 0) | ((k.colorMask & 0x00000100) ? VK_COLOR_COMPONENT_G_BIT : 0) | ((k.colorMask & 1) ? VK_COLOR_COMPONENT_B_BIT : 0) | ((k.colorMask & 0x01000000) ? VK_COLOR_COMPONENT_A_BIT : 0);
   VkPipelineColorBlendStateCreateInfo cb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO}; cb.attachmentCount = 1; cb.pAttachments = &ba;
@@ -575,6 +578,7 @@ static void GpuDrawImpl(uint32_t prim, const SoftVertex* verts, size_t n) {
     }
   }
   PipeKey pk{}; pk.vs = vhash; pk.fs = fhash; pk.usedMask = used; pk.blendEnable = R(0x304) != 0; pk.sfac = R(0x344); pk.dfac = R(0x348); pk.eq = R(0x350); pk.depthTest = R(0x30C) != 0; pk.depthFunc = R(0x354); pk.depthMask = R(0x35C) != 0;
+  { auto& zw = g_zWriters[R(0x214)]; if (pk.depthTest && pk.depthMask) { if (zw.cur != rt) { zw.other = zw.cur; zw.cur = rt; } } if (pk.depthTest && zw.other && zw.other != rt) pk.depthFunc |= 0x10000; }   // crossZ: another colour surface wrote this depth buffer earlier in the frame
   { static int zl = 0; if (zl++ < 6) Log("[vk] depth state: test=%u mask=%u func=0x%x zeta=0x%x (RT 0x%x)", pk.depthTest, pk.depthMask, pk.depthFunc, R(0x214), rt->offset); }
   if (pk.depthTest && pk.depthMask) { rt->zeta = R(0x214); rt->lastDepthWrite = g_drawSerial + 1; }
   pk.cull = R(0x308) ? R(0x39C) : 0; pk.front = R(0x3A0); pk.colorMask = R(0x358);
@@ -639,7 +643,7 @@ void GpuFlip() {
   if (t2 - g_statT0 >= 1000000) { Log("[perf] %llu flips, %llu draws, draw %llu ms (tex %llu, desc %llu), flip %llu ms per %llu ms", (unsigned long long)g_statFlips, (unsigned long long)g_statDraws, (unsigned long long)(g_statDrawUs / 1000), (unsigned long long)(g_tTexUs / 1000), (unsigned long long)(g_tDescUs / 1000), (unsigned long long)(g_statFlipUs / 1000), (unsigned long long)((t2 - g_statT0) / 1000)); g_statFlips = g_statDraws = g_statDrawUs = g_statFlipUs = g_tTexUs = g_tDescUs = 0; g_statT0 = t2; }
 }
 static void GpuFlipImpl() {
-  g_lastFrameDraws = g_frameDraws; g_frameDraws = 0; ++g_dbgFlips; g_ovSwitches = 0; g_ovSince = 0; g_ovLastRt = nullptr;
+  g_zWriters.clear(); g_lastFrameDraws = g_frameDraws; g_frameDraws = 0; ++g_dbgFlips; g_ovSwitches = 0; g_ovSince = 0; g_ovLastRt = nullptr;
   { static const char* sw = getenv("XBOX_CAPLIST"); static uint32_t t0 = (uint32_t)plat::TickMs();   // XBOX_CAPLIST="16:100,20:300,...": from t seconds on, cap draws per frame at N (logged as [sweep])
     if (sw) { uint32_t el = ((uint32_t)plat::TickMs() - t0) / 1000; int cap = -1; const char* q = sw; while (*q) { int t = 0, c = 0, used = 0; if (sscanf(q, "%d:%d%n", &t, &c, &used) < 2) break; if ((int)el >= t) cap = c; q += used; if (*q == ',') ++q; }
       if (cap != g_capSweep) { g_capSweep = cap; Log("[sweep] cap %d at %lus", cap, (unsigned long)el); } } }
@@ -697,7 +701,7 @@ static void GpuFlipImpl() {
   vkResetFences(g_dev, 1, &fr.fence); CHK(vkQueueSubmit(g_queue, 1, &si, fr.fence));
   if (!dumpReqs.empty()) { vkWaitForFences(g_dev, 1, &fr.fence, VK_TRUE, ~0ull); for (auto& q : dumpReqs) WriteDump(g_dbgFlips, q); }
   if (lumPtr) { vkWaitForFences(g_dev, 1, &fr.fence, VK_TRUE, ~0ull); double sum = 0; size_t n = (size_t)lumW * lumH; for (size_t i = 0; i < n; i += 7) sum += lumPtr[i * 4] + lumPtr[i * 4 + 1] + lumPtr[i * 4 + 2];
-    if (darkNow) { static double prev = 0; static int caps = 0; double m = sum / (n / 7 + 1) / 3; if (prev >= 20 && m < 8 && caps < 4) { ++caps; g_darkArm = g_dbgFlips + 1; Log("[dark] screen went from mean %.1f to %.1f at flip %d: logging the next two frames", prev, m, g_dbgFlips); } prev = m; }
+    if (darkNow) { static double prev = 0; static int caps = 0; double m = sum / (n / 7 + 1) / 3; if (prev >= 20 && m < 8 && caps < 8 && g_dbgFlips > 1200) { ++caps; g_darkArm = g_dbgFlips + 1; Log("[dark] screen went from mean %.1f to %.1f at flip %d: logging the next two frames", prev, m, g_dbgFlips); } prev = m; }
     if (lumOn) Log("[lum] flip %d cap %d tailK %d ovCap %d lastframe-draws %d mean %.2f", g_dbgFlips, g_capSweep, g_tailK, g_ovCap, g_lastFrameDraws, sum / (n / 7 + 1) / 3); }
   VkPresentInfoKHR pi{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR}; pi.waitSemaphoreCount = 1; pi.pWaitSemaphores = &fr.renderDone; pi.swapchainCount = 1; pi.pSwapchains = &g_swap; pi.pImageIndices = &ix; vkQueuePresentKHR(g_queue, &pi);
   g_fi ^= 1; ++g_frameNo; g_rendering = false;
