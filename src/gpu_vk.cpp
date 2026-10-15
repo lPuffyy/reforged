@@ -439,7 +439,8 @@ static void GpuDrawImpl(uint32_t prim, const SoftVertex* verts, size_t n) {
   }
   g_tTexUs += NowUs() - tA;
   uint64_t fhash = Fnv(&fi, sizeof fi); Shader& fs = g_fsCache[fhash];
-  if (!fs.mod) { auto spv = getenv("XBOX_FS_SIMPLE") ? GenSimpleFragmentShader() : GenFragmentShader(fi); fs.mod = MakeModule(spv); Log("[vk] fragment shader %016llx: %zu words (%u stages)", (unsigned long long)fhash, spv.size(), fi.numStages); }
+  if (!fs.mod) { auto spv = getenv("XBOX_FS_SIMPLE") ? GenSimpleFragmentShader() : GenFragmentShader(fi); fs.mod = MakeModule(spv); Log("[vk] fragment shader %016llx: %zu words (%u stages) texture modes %u,%u,%u,%u cube %u%u%u%u", (unsigned long long)fhash, spv.size(), fi.numStages,
+      fi.texMode[0], fi.texMode[1], fi.texMode[2], fi.texMode[3], (R(0x1B04) >> 2) & 1, (R(0x1B44) >> 2) & 1, (R(0x1B84) >> 2) & 1, (R(0x1BC4) >> 2) & 1); }
   // ---- geometry: triangle list + packed used attributes ----
   std::vector<uint32_t> idx;
   auto tri = [&](uint32_t a, uint32_t b, uint32_t c) { idx.push_back(a); idx.push_back(b); idx.push_back(c); };

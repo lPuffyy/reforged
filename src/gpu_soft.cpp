@@ -189,6 +189,12 @@ Tex GetTexture(int i) {
   if (!dma) return t;
   uint32_t lim; uint8_t* p = Nv2aDmaMap(dma, &lim);
   t.fmt = (fmt >> 8) & 0xFF; t.data = p + off; t.valid = true;
+  {   // diagnostics: log each distinct kind of texture the title uses once (format, size, cube map, dimensionality, mip levels), so unsupported kinds are visible in the log
+    static std::set<uint64_t> kinds; static int nk = 0;
+    uint32_t cube = (fmt >> 2) & 1, dim = (fmt >> 4) & 15, mips = (fmt >> 16) & 15, lw = (fmt >> 20) & 15, lh = (fmt >> 24) & 15, ld = fmt >> 28;
+    uint64_t key = (uint64_t)((fmt >> 8) & 0xFF) | (uint64_t)cube << 8 | (uint64_t)dim << 9 | (uint64_t)lw << 16 | (uint64_t)lh << 24 | (uint64_t)ld << 32 | (uint64_t)(rect >> 16) << 36;
+    if (nk < 400 && kinds.insert(key).second) { ++nk; Log("[tex] stage %d: format 0x%02x, %s, dim %u, %ux%u (log2 %u,%u,%u), %u mip level(s)%s%s", i, (fmt >> 8) & 0xFF, cube ? "CUBE MAP" : "2D", dim, rect >> 16, rect & 0xFFFF, lw, lh, ld, mips, ((fmt >> 8) & 0xFF) >= 0x10 ? ", linear" : "", dim == 3 ? ", VOLUME" : ""); }
+  }
   if (t.fmt == 0x0B) {   // P8: 256/128/64/32 ARGB palette entries (NV097_SET_TEXTURE_PALETTE: bit0 dma A/B, bits 2-3 length, offset in the upper bits)
     uint32_t pr = R(base + 0x20), pdma = (pr & 1) ? Pgraph3dDmaInstance(3) : Pgraph3dDmaInstance(2);
     if (pdma) { uint32_t plim; t.pal = (const uint32_t*)(Nv2aDmaMap(pdma, &plim) + (pr & 0xFFFFFFC0u)); t.palLen = 256 >> ((pr >> 2) & 3); }
