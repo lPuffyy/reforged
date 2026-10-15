@@ -257,15 +257,19 @@ bool UploadTexture(int stage, TexEntry** out) {
 }
 
 // ---------------- render targets ----------------
+static std::map<uint64_t, Img*> g_sharedDepth;   // depth images by (zeta address, size)
+static Img* SharedDepth(int w, int h) {
+  uint64_t dk = (uint64_t)R(0x214) << 32 | (uint32_t)(w << 16 | h); auto sd = g_sharedDepth.find(dk);
+  if (sd == g_sharedDepth.end()) sd = g_sharedDepth.emplace(dk, new Img(MakeImg(w, h, VK_FORMAT_D32_SFLOAT, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, VK_IMAGE_ASPECT_DEPTH_BIT))).first;
+  return sd->second;
+}
 RenderTarget* GetRT(int w, int h) {
-  uint32_t key = (uint32_t)(w << 16 | h) ^ (R(0x210) * 2654435761u) ^ (R(0x214) * 40503u);
-  for (auto* r : g_rts) if (r->key == key) return r;
+  uint32_t key = (uint32_t)(w << 16 | h) ^ (R(0x210) * 2654435761u);
+  // A colour surface keeps one render target; its depth image follows the depth buffer address in use (targets that name the same address share it, as on the console)
+  for (auto* r : g_rts) if (r->key == key) { Img* d = SharedDepth(w, h); if (r->dp != d) { if (g_rt == r) EndRendering(); r->dp = d; } return r; }
   RenderTarget* rt = new RenderTarget; rt->key = key; rt->w = w; rt->h = h; rt->offset = R(0x210);
   rt->color = MakeImg(w, h, VK_FORMAT_B8G8R8A8_UNORM, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
-  // Render targets that name the same depth buffer address share it (the title renders one pass into an off-screen colour target and later tests the main target against that depth)
-  static std::map<uint64_t, Img*> sharedDepth; uint64_t dk = (uint64_t)R(0x214) << 32 | (uint32_t)(w << 16 | h); auto sd = sharedDepth.find(dk);
-  if (sd == sharedDepth.end()) { Img* di = new Img(MakeImg(w, h, VK_FORMAT_D32_SFLOAT, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, VK_IMAGE_ASPECT_DEPTH_BIT)); sd = sharedDepth.emplace(dk, di).first; }
-  rt->dp = sd->second;
+  rt->dp = SharedDepth(w, h);
   g_rts.push_back(rt); Log("[vk] render target %dx%d (key %08x)", w, h, key); return rt;
 }
 bool SurfaceDims(int* x, int* y, int* w, int* h) {
