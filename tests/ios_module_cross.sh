@@ -12,6 +12,10 @@ python -I "$root/tools/lift_survey.py" lift_test.xbe > survey.log
 python -I "$root/tools/lift.py" lift_test.xbe --out work/lift/gen > lift.log
 tail -2 lift.log
 python -I "$root/tools/build_module.py" --gen work/lift/gen --out game_module.dylib --clang clang++ --sse2neon "$SSE2NEON_DIR"
+lld_bin="$(command -v lld || ls /usr/lib/llvm-*/bin/lld | tail -1)"
+echo "--- direct link with $lld_bin"
+python -I "$root/tools/build_module.py" --gen work/lift/gen --out game_module_direct.dylib --clang clang --lld "$lld_bin" --sse2neon "$SSE2NEON_DIR" --keep module_obj_direct
+cmp <("$(command -v llvm-nm || ls /usr/lib/llvm-*/bin/llvm-nm | tail -1)" -gU game_module.dylib) <("$(command -v llvm-nm || ls /usr/lib/llvm-*/bin/llvm-nm | tail -1)" -gU game_module_direct.dylib) && echo "both link modes export the same symbols"
 
 tool() { command -v "$1" 2>/dev/null || ls /usr/lib/llvm-*/bin/"$1" 2>/dev/null | tail -1; }
 objdump="$(tool llvm-objdump)"; nm="$(tool llvm-nm)"

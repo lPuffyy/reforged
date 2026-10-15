@@ -23,13 +23,15 @@ def main():
     ap.add_argument('--jobs', type=int, default=os.cpu_count() or 2)
     ap.add_argument('--keep', default='', help='keep object files in this directory')
     ap.add_argument('--ld', default='lld', choices=['lld', 'system'], help="linker: lld (portable) or the system linker (Apple's ld on a Mac)")
+    ap.add_argument('--lld', default='', help='path of the lld executable: link with it directly (no compiler driver needed)')
     a = ap.parse_args()
 
     clang = shutil.which(a.clang) or a.clang
-    ok, ver = run([clang, '--version'])
+    driver = [] if '++' in os.path.basename(clang) else ['--driver-mode=g++']   # a plain `clang` executable compiles C++ when asked to
+    ok, ver = run([clang] + driver + ['--version'])
     if ok != 0: sys.exit('cannot run %s' % clang)
     print(ver.split('\n')[0])
-    ok, res = run([clang, '--print-resource-dir']); res = res.strip()
+    ok, res = run([clang] + driver + ['--print-resource-dir']); res = res.strip()
     srcs = sorted(glob.glob(os.path.join(a.gen, '*.cpp'))) + [os.path.join(ROOT, 'src', 'lift_module_main.cpp')]
     objdir = a.keep or os.path.join(os.path.dirname(os.path.abspath(a.out)) or '.', 'module_obj')
     os.makedirs(objdir, exist_ok=True)
@@ -42,7 +44,7 @@ def main():
     t0 = time.time(); done = [0]; failed = []
     def compile_one(src):
         obj = os.path.join(objdir, os.path.basename(src) + '.o')
-        rc, out = run([clang] + flags + ['-c', src, '-o', obj])
+        rc, out = run([clang] + driver + flags + ['-c', src, '-o', obj])
         done[0] += 1
         print('[%d/%d] %s%s' % (done[0], len(srcs), os.path.basename(src), '' if rc == 0 else '  FAILED'), flush=True)
         if rc != 0: failed.append((src, out))
@@ -52,8 +54,15 @@ def main():
         for src, out in failed[:3]: print('--- %s\n%s' % (src, out[:4000]))
         sys.exit('%d file(s) failed to compile' % len(failed))
 
-    link = [clang, '--target=' + a.target] + (['-fuse-ld=lld'] if a.ld == 'lld' else []) + ['-nostdlib', '-dynamiclib', '-Wl,-undefined,dynamic_lookup',
-            '-Wl,-install_name,@rpath/' + os.path.basename(a.out), '-o', a.out] + objs
+    if a.lld:   # link directly with lld in Mach-O mode: target "arm64-apple-ios15.0[-simulator]" -> platform and minimum version
+        m = re.match(r'arm64-apple-ios([0-9.]+)(-simulator)?$', a.target)
+        if not m: sys.exit('--lld needs an arm64-apple-ios target, got %s' % a.target)
+        platform = 'ios-simulator' if m.group(2) else 'ios'
+        link = [a.lld, '-flavor', 'darwin', '-arch', 'arm64', '-dylib', '-platform_version', platform, m.group(1), m.group(1), '-undefined', 'dynamic_lookup',
+                '-install_name', '@rpath/' + os.path.basename(a.out), '-o', a.out] + objs
+    else:
+        link = [clang] + driver + ['--target=' + a.target] + (['-fuse-ld=lld'] if a.ld == 'lld' else []) + ['-nostdlib', '-dynamiclib', '-Wl,-undefined,dynamic_lookup',
+                '-Wl,-install_name,@rpath/' + os.path.basename(a.out), '-o', a.out] + objs
     rc, out = run(link)
     if rc != 0: sys.exit('link failed:\n' + out[:4000])
     print('built %s (%.1f MB) in %.0f s' % (a.out, os.path.getsize(a.out) / 1e6, time.time() - t0))

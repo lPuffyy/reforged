@@ -51,6 +51,49 @@ def download_release_ipa(pubkey_hex, version=None):
     return data
 
 
+# ---- toolchain pack (compiler, linker, headers, symbol scanner) ----
+def host_id():
+    system, machine = platform.system(), platform.machine().lower()
+    arch = 'arm64' if machine in ('arm64', 'aarch64') else 'x64' if machine in ('amd64', 'x86_64') else machine
+    return {'Windows': 'windows', 'Linux': 'linux', 'Darwin': 'macos'}.get(system, system.lower()) + '-' + arch
+
+def cache_dir():
+    base = os.environ.get('LOCALAPPDATA') if platform.system() == 'Windows' else os.environ.get('XDG_CACHE_HOME') or os.path.join(os.path.expanduser('~'), '.cache')
+    return os.path.join(base or os.path.expanduser('~'), 'Reforged', 'toolchain')
+
+def unpack_zip(data, dest):
+    with zipfile.ZipFile(io.BytesIO(data)) as z:
+        for info in z.infolist():
+            path = os.path.join(dest, info.filename)
+            if not os.path.abspath(path).startswith(os.path.abspath(dest) + os.sep): die('unsafe path in the toolchain pack')
+            if info.is_dir(): continue
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, 'wb') as f: f.write(z.read(info))
+            mode = (info.external_attr >> 16) & 0o777
+            if mode: os.chmod(path, mode)
+
+def get_toolchain(pubkey_hex):
+    """Downloads (once) and verifies the toolchain pack for this computer; returns the folder it is unpacked in."""
+    import ed25519
+    host = host_id(); dest = os.path.join(cache_dir(), host)
+    if os.path.exists(os.path.join(dest, 'manifest.json')): return dest
+    if not pubkey_hex: die('this build of the companion has no release key built in; use --toolchain <folder> or --clang/--lld')
+    rel = json.loads(http_get('https://api.github.com/repos/%s/releases/tags/toolchain' % REPO))
+    name = 'toolchain-%s.zip' % host
+    asset = next((x for x in rel['assets'] if x['name'] == name), None); sig = next((x for x in rel['assets'] if x['name'] == name + '.sig'), None)
+    if not asset or not sig: die('no toolchain pack is published for this computer (%s)' % host)
+    print('  downloading the compiler toolchain once (%.0f MB)' % (asset['size'] / 1e6))
+    data = http_get(asset['browser_download_url']); signature = http_get(sig['browser_download_url'])
+    if not ed25519.verify(bytes.fromhex(pubkey_hex), data, signature): die('the downloaded toolchain does not match its signature: refusing to use it')
+    shutil.rmtree(dest, ignore_errors=True); os.makedirs(dest, exist_ok=True); unpack_zip(data, dest)
+    return dest
+
+def pack_paths(folder):
+    exe = '.exe' if platform.system() == 'Windows' else ''
+    return {'clang': os.path.join(folder, 'bin', 'clang' + exe), 'lld': os.path.join(folder, 'bin', 'lld' + exe),
+            'scanner': os.path.join(folder, 'xbsym', 'XbSymbolDatabaseCLI' + exe), 'sse2neon': os.path.join(folder, 'include')}
+
+
 # ---- steps ----
 def find_iso(arg):
     if arg: return arg
@@ -85,7 +128,9 @@ def main():
     ap.add_argument('--iso', help='disc image (default: the first .iso next to this program)')
     ap.add_argument('--ipa', help='use this app file instead of downloading the latest release')
     ap.add_argument('--out', help='where to write the personal app (default: next to the disc image)')
-    ap.add_argument('--clang', default='clang++', help='C++ compiler for the module (clang)')
+    ap.add_argument('--toolchain', default='', help='folder of an unpacked toolchain pack (default: download and cache the signed pack)')
+    ap.add_argument('--clang', default='', help='use this clang instead of the toolchain pack')
+    ap.add_argument('--lld', default='', help='use this lld instead of the toolchain pack')
     ap.add_argument('--ld', default='lld', choices=['lld', 'system'])
     ap.add_argument('--sse2neon', default='', help='directory containing sse2neon.h')
     ap.add_argument('--xbsym-cli', default='', help='symbol scanner (XbSymbolDatabaseCLI)')
@@ -95,7 +140,7 @@ def main():
     ap.add_argument('--work', default='', help='working directory (default: a temporary one)')
     ap.add_argument('--keep', action='store_true')
     a = ap.parse_args()
-    steps = 6
+    steps = 7
 
     iso = find_iso(a.iso)
     say(1, steps, 'reading %s' % os.path.basename(iso))
@@ -116,31 +161,43 @@ def main():
     if a.ipa: base = open(a.ipa, 'rb').read()
     else: base = download_release_ipa(a.pubkey)
 
-    say(3, steps, 'finding the game\'s audio and controller routines')
-    if a.skip_symbols or not a.xbsym_cli: print('  skipped' + ('' if a.skip_symbols else ' (no symbol scanner available: the game will run without its own audio and controller hooks)'))
+    say(3, steps, "preparing the toolchain")
+    if a.clang or a.lld:
+        tc = {'clang': a.clang or 'clang++', 'lld': a.lld, 'scanner': a.xbsym_cli, 'sse2neon': a.sse2neon}
     else:
-        n = scan_symbols(xbe_path, a.xbsym_cli, os.path.join(work, 'xbsym.txt'))
+        tc = pack_paths(a.toolchain or get_toolchain(a.pubkey))
+        for k in ('clang', 'lld'):
+            if not os.path.exists(tc[k]): die('the toolchain is missing %s' % tc[k])
+    if a.xbsym_cli: tc['scanner'] = a.xbsym_cli
+    if a.sse2neon: tc['sse2neon'] = a.sse2neon
+    print('  ok')
+
+    say(4, steps, "finding the game's audio and controller routines")
+    if a.skip_symbols or not tc.get('scanner') or not os.path.exists(tc['scanner']): print('  skipped' + ('' if a.skip_symbols else ' (no symbol scanner available: the game will run without its own audio and controller hooks)'))
+    else:
+        n = scan_symbols(xbe_path, tc['scanner'], os.path.join(work, 'xbsym.txt'))
         print('  %d symbols' % n)
         rc, out = run_tool('gen_title_data.py', ['--xbe', xbe_path, '--xbsym', os.path.join(work, 'xbsym.txt'), '--out', title])
         if rc != 0: die('could not build the title data:\n' + out)
         print('  ' + out.strip().splitlines()[-1])
 
-    say(4, steps, 'translating the game code on this computer')
+    say(5, steps, 'translating the game code on this computer')
     rc, out = run_tool('lift_survey.py', [xbe_path], cwd=work)
     if rc != 0: die('survey failed:\n' + out[-2000:])
     rc, out = run_tool('lift.py', [xbe_path, '--out', os.path.join('work', 'lift', 'gen')], cwd=work)
     if rc != 0: die('translation failed:\n' + out[-2000:])
     print('  ' + [l for l in out.splitlines() if l.startswith('lifted')][-1])
 
-    say(5, steps, 'building the game module (this is the slow step)')
+    say(6, steps, 'building the game module (this is the slow step)')
     module = os.path.join(work, 'reforged_game.dylib')
-    margs = ['--gen', os.path.join(work, 'work', 'lift', 'gen'), '--out', module, '--clang', a.clang, '--ld', a.ld]
-    if a.sse2neon: margs += ['--sse2neon', a.sse2neon]
+    margs = ['--gen', os.path.join(work, 'work', 'lift', 'gen'), '--out', module, '--clang', tc['clang'], '--ld', a.ld]
+    if tc.get('lld'): margs += ['--lld', tc['lld']]
+    if tc.get('sse2neon'): margs += ['--sse2neon', tc['sse2neon']]
     rc, out = run_tool('build_module.py', margs)
     print(out[-600:].rstrip())
     if rc != 0: die('the module did not build')
 
-    say(6, steps, 'writing your personal app')
+    say(7, steps, 'writing your personal app')
     files = {'Frameworks/reforged_game.dylib': open(module, 'rb').read(), 'title/default.xbe': xbe}
     for f in os.listdir(title): files['title/' + f] = open(os.path.join(title, f), 'rb').read()
     if a.no_disc: files['title/no-disc.txt'] = b'no disc needed\n'

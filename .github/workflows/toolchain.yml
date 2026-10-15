@@ -1,0 +1,100 @@
+name: toolchain
+# Builds the toolchain pack the companion tool downloads on first use: the parts of the official LLVM release needed to build the iOS game module
+# (clang, lld, compiler headers) plus the symbol scanner (XbSymbolDatabase, MIT), one zip per host. Each pack is tested by cross-compiling the test module
+# with only what is inside it. On a manual run the packs are also signed and published to the release tagged "toolchain" (see docs/RELEASING.md).
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - tools/make_toolchain_pack.py
+      - tools/build_module.py
+      - tools/macho_info.py
+      - tests/toolchain_pack_test.sh
+      - .github/workflows/toolchain.yml
+
+permissions:
+  contents: write
+
+env:
+  LLVM_VERSION: '18.1.8'
+  LLVM_MAJOR: '18'
+  XBSDB_COMMIT: '20eced544726f5558c5a408458f38a086cc4e543'
+
+jobs:
+  pack:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: windows-x64, os: windows-latest, asset: 'clang+llvm-18.1.8-x86_64-pc-windows-msvc.tar.xz' }
+          - { name: linux-x64, os: ubuntu-latest, asset: 'clang+llvm-18.1.8-x86_64-linux-gnu-ubuntu-18.04.tar.xz' }
+          - { name: macos-arm64, os: macos-14, asset: 'clang+llvm-18.1.8-arm64-apple-macos11.tar.xz' }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Official LLVM release
+        shell: bash
+        run: |
+          curl -sL -o llvm.tar.xz "https://github.com/llvm/llvm-project/releases/download/llvmorg-${LLVM_VERSION}/${{ matrix.asset }}"
+          ls -l llvm.tar.xz
+          python -c "import hashlib; print('llvm archive sha256', hashlib.sha256(open('llvm.tar.xz','rb').read()).hexdigest())"
+      - name: Symbol scanner (XbSymbolDatabase)
+        shell: bash
+        run: |
+          git clone https://github.com/Cxbx-Reloaded/XbSymbolDatabase.git xbsdb
+          git -C xbsdb checkout "$XBSDB_COMMIT"
+          cmake -S xbsdb -B xbsdb/build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DXBSDB_BUILD_CLI=ON -DXBSDB_BUILD_UNITTEST=OFF \
+            -DCMAKE_POLICY_DEFAULT_CMP0091=NEW -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
+          cmake --build xbsdb/build --config Release --parallel --target XbSymbolDatabaseCLI
+          find xbsdb/build -name 'XbSymbolDatabaseCLI*' -type f | grep -v '\.pdb$' | head -3
+      - name: sse2neon
+        shell: bash
+        run: git clone --depth 1 --branch v1.8.0 https://github.com/DLTcollab/sse2neon.git sse2neon
+      - name: Pack
+        shell: bash
+        run: |
+          cli="$(find xbsdb/build -name 'XbSymbolDatabaseCLI' -o -name 'XbSymbolDatabaseCLI.exe' | grep -v '\.pdb$' | head -1)"
+          python -I tools/make_toolchain_pack.py --llvm-archive llvm.tar.xz --llvm-version "$LLVM_MAJOR" --xbsym-cli "$cli" \
+            --xbsym-license xbsdb/LICENSE --xbsym-commit "$XBSDB_COMMIT" --sse2neon-header sse2neon/sse2neon.h --sse2neon-license sse2neon/LICENSE --host "${{ matrix.name }}" --out "toolchain-${{ matrix.name }}.zip"
+      - name: Test the pack (cross-compile the test module with only what is in it)
+        shell: bash
+        run: |
+          set +e
+          bash tests/toolchain_pack_test.sh "toolchain-${{ matrix.name }}.zip" > pack_test.log 2>&1
+          rc=$?
+          cat pack_test.log
+          if [ $rc -ne 0 ]; then
+            msg=$( (grep -E "error|FAILED|Traceback|not |missing|Assertion" pack_test.log | head -30 | cut -c1-300; echo ----; tail -c 2500 pack_test.log) | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+            echo "::error title=toolchain pack test failed (${{ matrix.name }})::$msg"
+          fi
+          exit $rc
+      - uses: actions/upload-artifact@v4
+        with:
+          name: toolchain-${{ matrix.name }}
+          path: toolchain-${{ matrix.name }}.zip
+
+  publish:
+    if: github.event_name == 'workflow_dispatch'
+    needs: pack
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: toolchain-*
+          merge-multiple: true
+      - name: Sign and publish
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test -n "$RELEASE_SIGNING_KEY" || { echo "the RELEASE_SIGNING_KEY secret is not set (see docs/RELEASING.md)"; exit 1; }
+          printf '%s\n' "$RELEASE_SIGNING_KEY" > "$RUNNER_TEMP/key.pem"
+          for f in toolchain-*.zip; do openssl pkeyutl -sign -rawin -inkey "$RUNNER_TEMP/key.pem" -in "$f" -out "$f.sig"; done
+          rm -f "$RUNNER_TEMP/key.pem"
+          gh release delete toolchain -y --cleanup-tag || true
+          gh release create toolchain toolchain-*.zip toolchain-*.zip.sig --title "Toolchain pack" \
+            --notes "Compiler toolchain (LLVM $LLVM_VERSION: clang and lld, unmodified) and symbol scanner (XbSymbolDatabase, MIT) used by the companion tool. Signed with the project release key. Licenses are inside each pack."
