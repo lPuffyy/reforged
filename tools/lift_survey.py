@@ -43,6 +43,7 @@ mdl = Cs(CS_ARCH_X86, CS_MODE_32); mdl.detail = False
 def looks_like_start(t):
     b0 = rd(t, 3)
     if not b0: return False
+    if b0[:1] == bytes([0xE9]) and len(rd(t, 5)) == 5 and in_code((t + 5 + struct.unpack_from('<i', rd(t, 5), 1)[0]) & 0xFFFFFFFF): return True   # a jump stub (thunk) reached through a function-pointer table
     first = next(mdl.disasm(rd(t, 16), t, 1), None)
     if first is None: return False
     return (b0[:1] in (bytes([0x55]), bytes([0x53]), bytes([0x56]), bytes([0x57]), bytes([0x51]), bytes([0x52]), bytes([0xB8])) or b0[:2] in (bytes([0x83, 0xEC]), bytes([0x81, 0xEC]), bytes([0x33, 0xC0]), bytes([0x8B, 0x44]), bytes([0x8B, 0x4C]), bytes([0x8B, 0x54]), bytes([0x8B, 0x45])) or first.mnemonic in ('mov', 'sub', 'push', 'xor', 'cmp', 'test', 'lea', 'call'))
