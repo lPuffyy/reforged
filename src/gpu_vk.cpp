@@ -399,6 +399,7 @@ void GpuClear(uint32_t mask, uint32_t colorValue, uint32_t zValue, int x0, int y
   int sx, sy, sw, sh; if (!SurfaceDims(&sx, &sy, &sw, &sh)) return;
   BeginFrame(); RenderTarget* rt = GetRT(sx + sw, sy + sh); BeginRendering(rt); rt->lastWrite = ++g_drawSerial;
   { static const char* fl = getenv("XBOX_FRAMELOG2"); if (fl && g_dbgFlips >= atoi(fl) && g_dbgFlips < atoi(fl) + 2) Log("[frame2] flip %d draw#%d CLEAR mask=0x%x colour=0x%08x z=0x%x rect=(%d,%d)-(%d,%d) -> RT off=0x%x %dx%d (surface clip %d,%d %dx%d)", g_dbgFlips, g_frameDraws, mask, colorValue, zValue, x0, y0, x1, y1, rt->offset, rt->w, rt->h, sx, sy, sw, sh); }
+  if (g_drawLogFlip == g_dbgFlips || (g_darkArm >= 0 && (g_dbgFlips == g_darkArm || g_dbgFlips == g_darkArm + 1)) || (g_dbgFlips > 0 && g_dbgFlips % 2400 < 2)) Log("[drawlog] flip %d clear before draw %d mask=0x%x colour=0x%08x z=0x%x rect=(%d,%d)-(%d,%d) rt=%dx%d@%x zeta=%x", g_dbgFlips, g_frameDraws, mask, colorValue, zValue, x0, y0, x1, y1, rt->w, rt->h, rt->offset, R(0x214));
   VkClearAttachment ca[2]; int n = 0;
   if (mask & 0xF0) { ca[n].aspectMask = VK_IMAGE_ASPECT_COLOR_BIT; ca[n].colorAttachment = 0; ca[n].clearValue.color = {{((colorValue >> 16) & 255) / 255.f, ((colorValue >> 8) & 255) / 255.f, (colorValue & 255) / 255.f, (colorValue >> 24) / 255.f}}; n++; }
   if (mask & 0x3) { uint32_t zfmt = (R(0x208) >> 4) & 0xF; float d = zfmt == 1 ? (zValue & 0xFFFF) / 65535.f : (zValue >> 8) / 16777215.f; ca[n].aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT; ca[n].clearValue.depthStencil = {d, 0}; n++; }
