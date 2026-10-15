@@ -1,6 +1,6 @@
 # Companion tool and iOS app: design
 
-Status: design agreed, not implemented. Nothing game-derived is ever published; the personal IPA and the game module exist only on the user's machine.
+Status: implemented and used on a real device (see PORTING.md for what a first run showed). Nothing game-derived is ever published; the personal IPA and the game module exist only on the user's machine.
 
 ## Flow
 1. The user puts the companion executable next to their disc image and runs it (double-click, or drag the image onto it).
