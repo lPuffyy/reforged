@@ -191,7 +191,7 @@ def main():
     say(5, steps, 'translating the game code on this computer')
     rc, out = run_tool('lift_survey.py', [xbe_path], cwd=work)
     if rc != 0: die('survey failed:\n' + out[-2000:])
-    rc, out = run_tool('lift.py', [xbe_path, '--out', os.path.join('work', 'lift', 'gen')], cwd=work)
+    rc, out = run_tool('lift.py', [xbe_path, '--out', os.path.join('work', 'lift', 'gen'), '--patches', os.path.join(title, 'patches.txt')], cwd=work)   # the translated code must include the title's byte patches
     if rc != 0: die('translation failed:\n' + out[-2000:])
     print('  ' + [l for l in out.splitlines() if l.startswith('lifted')][-1])
 
