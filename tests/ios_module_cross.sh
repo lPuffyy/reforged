@@ -16,9 +16,10 @@ python -I "$root/tools/build_module.py" --gen work/lift/gen --out game_module.dy
 tool() { command -v "$1" 2>/dev/null || ls /usr/lib/llvm-*/bin/"$1" 2>/dev/null | tail -1; }
 objdump="$(tool llvm-objdump)"; nm="$(tool llvm-nm)"
 echo "--- Mach-O headers"
-"$objdump" --macho --private-headers game_module.dylib | grep -E "cputype|filetype|platform|minos|name @rpath" | head
-"$objdump" --macho --private-headers game_module.dylib | grep -q "ARM64" || { echo "not an arm64 binary"; exit 1; }
-"$objdump" --macho --private-headers game_module.dylib | grep -qi "platform.*IOS\|platform 2" || { echo "not built for the iOS platform"; exit 1; }
+hdr="$("$objdump" --macho --private-headers game_module.dylib)"   # captured first: grep -q exiting early would kill a pipeline writer (SIGPIPE) under pipefail
+grep -E "cputype|filetype|platform|minos|name @rpath" <<< "$hdr" | head
+grep -q "ARM64" <<< "$hdr" || { echo "not an arm64 binary"; exit 1; }
+grep -qi "platform.*IOS\|platform 2" <<< "$hdr" || { echo "not built for the iOS platform"; exit 1; }
 echo "--- exports"
 "$nm" -gU game_module.dylib | tee exports.txt
 grep -q "_reforged_module_init" exports.txt || { echo "entry point not exported"; exit 1; }

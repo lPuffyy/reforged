@@ -79,7 +79,10 @@ if(IOS)
   target_link_libraries(reforged_core PUBLIC Threads::Threads ${CMAKE_DL_LIBS})
   target_link_libraries(reforged_core PUBLIC "-framework AudioToolbox" "-framework AVFoundation" "-framework QuartzCore" "-framework Metal" "-framework GameController")
 
+  # Objective-C++ with automatic reference counting (the app and the Apple backends hold Objective-C objects in C++ code)
+  target_compile_options(reforged_core PRIVATE $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
   add_executable(ReforgedApp MACOSX_BUNDLE ios/main.mm ios/AppDelegate.mm ios/TouchControls.mm)
+  target_compile_options(ReforgedApp PRIVATE -fobjc-arc)
   target_link_libraries(ReforgedApp PRIVATE reforged_core "-framework UIKit" "-framework Foundation" "-framework UniformTypeIdentifiers")
   set_target_properties(ReforgedApp PROPERTIES
     MACOSX_BUNDLE_INFO_PLIST ${CMAKE_SOURCE_DIR}/ios/Info.plist.in
