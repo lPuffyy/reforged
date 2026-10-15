@@ -41,7 +41,7 @@ ls -la "$data/Documents" || true
 log="$data/Documents/reforged.log"
 test -f "$log" || { echo "the runtime wrote no log"; exit 1; }
 cat "$log"
-grep -q "guest address space" "$log" || { echo "the runtime did not map the guest address space"; exit 1; }
+grep -q "register window mapped" "$log" || { echo "the runtime did not finish initialising (guest memory, device models)"; exit 1; }   # logged after guest memory and the device windows are mapped
 grep -q "XBE load failed" "$log" || { echo "the runtime did not reach the game load step"; exit 1; }
 xcrun simctl shutdown "$udid" || true
 echo "iOS app checks passed"
