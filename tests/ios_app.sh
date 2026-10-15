@@ -15,6 +15,14 @@ missing = [f for f in need if f not in n]
 assert not missing, ('the app icon is not in the app', missing, [x for x in n if x.count('/') == 2][:20])
 print('app icon present')
 PYEOF2
+# the self-registering hooks must be linked into the app (a static library link drops files nothing refers to by name)
+unzip -p Reforged-unsigned.ipa Payload/ReforgedApp.app/ReforgedApp > "$RUNNER_TEMP/ReforgedApp.bin" 2>/dev/null || unzip -p Reforged-unsigned.ipa Payload/ReforgedApp.app/ReforgedApp > /tmp/ReforgedApp.bin
+bin="${RUNNER_TEMP:-/tmp}/ReforgedApp.bin"; [ -s "$bin" ] || bin=/tmp/ReforgedApp.bin
+syms="$(nm "$bin" 2>/dev/null)"
+for s in _Hle_IDirectSoundBuffer_Play _Hle_XInputGetState; do
+  grep -q "$s" <<<"$syms" || { echo "the hook $s is missing from the app (the runtime library was not fully linked)"; exit 1; }
+done
+echo "audio and input hooks are linked into the app"
 
 echo "=== simulator build"
 cmake -S . -B build-sim -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=iphonesimulator -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \

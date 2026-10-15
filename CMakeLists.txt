@@ -88,6 +88,9 @@ if(IOS)
   file(GLOB REFORGED_ICONS ${CMAKE_SOURCE_DIR}/ios/icons/AppIcon60x60*.png ${CMAKE_SOURCE_DIR}/ios/icons/AppIcon76x76*.png ${CMAKE_SOURCE_DIR}/ios/icons/AppIcon83.5x83.5*.png)
   target_sources(ReforgedApp PRIVATE ${REFORGED_ICONS})
   set_source_files_properties(${REFORGED_ICONS} PROPERTIES MACOSX_PACKAGE_LOCATION "")
+  # The audio/input hooks register themselves from static initializers in files nothing else refers to; a normal static-library link would drop those files,
+  # so load every object of the runtime (this is what linking the objects directly does on the other platforms).
+  target_link_options(ReforgedApp PRIVATE "LINKER:-force_load,$<TARGET_FILE:reforged_core>")
   target_link_libraries(ReforgedApp PRIVATE reforged_core "-framework UIKit" "-framework Foundation" "-framework UniformTypeIdentifiers")
   set_target_properties(ReforgedApp PROPERTIES
     MACOSX_BUNDLE_INFO_PLIST ${CMAKE_SOURCE_DIR}/ios/Info.plist.in
