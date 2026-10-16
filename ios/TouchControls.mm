@@ -61,7 +61,7 @@ struct Control { Kind kind; CGPoint center; CGFloat radius; const char* label; }
     {kWhite, {ml + 34 * u, 100 * u}, 22 * u, "WHT"}, {kBlack, {w - mr - 34 * u, 100 * u}, 22 * u, "BLK"},
     {kLThumb, {L.x + rs + 28 * u, L.y - 20 * u}, 22 * u, "L3"}, {kRThumb, {R.x - rs - 28 * u, R.y - 20 * u}, 26 * u, "R3"},
     {kBack, {w / 2 - 52 * u, h - mb - 14 * u}, 20 * u, "BACK"}, {kStart, {w / 2 + 52 * u, h - mb - 14 * u}, 20 * u, "START"},
-    {kDUp, {D.x, D.y - ds}, dr, "\xE2\x96\xB2"}, {kDDown, {D.x, D.y + ds}, dr, "\xE2\x96\xBC"}, {kDLeft, {D.x - ds, D.y}, dr, "\xE2\x97\x80"}, {kDRight, {D.x + ds, D.y}, dr, "\xE2\x96\xB6"},   // triangles: up, down, left, right
+    {kDUp, {D.x, D.y - ds}, dr, "\xE2\x96\xB2"}, {kDDown, {D.x, D.y + ds}, dr, "\xE2\x96\xBC"}, {kDLeft, {D.x - ds, D.y}, dr, "\xE2\x97\x80\xEF\xB8\x8E"}, {kDRight, {D.x + ds, D.y}, dr, "\xE2\x96\xB6\xEF\xB8\x8E"},   // triangles: up, down, left, right
   };
   for (CAShapeLayer* l in _layers) [l removeFromSuperlayer];
   for (CALayer* l in _extras) [l removeFromSuperlayer];
