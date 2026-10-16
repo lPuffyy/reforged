@@ -82,7 +82,7 @@ Tap **Settings** in the library:
 ## System Link over the Internet
 The game's own System Link feature can run over the Internet through a relay server that one of the players hosts. In Settings, turn on *Use a relay server* and enter
 the relay's address and a room name that everyone who plays together shares, then use the game's System Link menu. Setting up the relay and the safety notes are in
-[RELAY.md](RELAY.md). This is early and has been tested between two copies of the runtime on a computer, not yet on a phone.
+[RELAY.md](RELAY.md). The project's relay (`relay.puffsco.com`) is already filled in; you only need to turn the switch on. This is early and has been tested between two copies of the runtime on a computer, not yet on a phone.
 
 ## Files and diagnostics
 The app writes these files into its folder (visible in the Files app):

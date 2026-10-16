@@ -56,7 +56,15 @@ A relay needs an address that does not change. If you have a domain:
 ## A default relay in the app
 The companion can build a relay address into a personal app so players only have to pick a room: `reforged-companion --relay relay.yourdomain.com:3075 --relay-room
 <name>`. The app uses it until the player changes or turns it off in Settings. Only apps built with that option use it, so nobody is pointed at your server by accident.
-The released app has no default relay.
+The released app comes with the project's own relay, `relay.puffsco.com:3075`, filled in but **off** until the player turns on *Use a relay server* in Settings (it is off by default on purpose: while it is on, the console contacts the relay every few seconds whenever a game runs, even for offline play, so the relay sees the player's address). Leaving the room empty uses one shared room; a room name makes a private one. A `--relay` build overrides the preset.
+
+## The project's relay
+`relay.puffsco.com` runs this same relay in a container on a home server (UDP 3075). It is a hobby service with no guarantees; it can be stopped or changed at any time, and
+the room limits above apply. For reference, the container is started with:
+```
+docker run -d --name reforged-relay --restart unless-stopped -p 3075:3075/udp -v <folder>/relay.py:/app/relay.py:ro \
+  --memory 128m --cpus 0.5 --read-only --user nobody python:3.12-slim python -u /app/relay.py --port 3075
+```
 
 ## Safety, privacy and limits
 - **Nothing is encrypted.** The relay (and everyone in your room) can see the game's network traffic, which can include player names. Do not use it for anything private.
