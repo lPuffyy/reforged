@@ -116,7 +116,7 @@ def descend():
                 a = nxt
 descend()
 # Gap filling: stretches of code that no call/jump reached (functions only reached through vtables, callbacks or tail jumps) start after padding; seed their first real instruction.
-for rnd in range(4):
+for rnd in range(400):   # one function per unreached stretch per round, so a long run of functions packed back to back takes many rounds
     new = []
     for (n_, v_, vs_, raw_, rs_) in code:
         a_ = v_; end_ = v_ + rs_
@@ -124,8 +124,10 @@ for rnd in range(4):
             if a_ in seen: a_ += 1; continue
             s_ = a_
             while a_ < end_ and a_ not in seen: a_ += 1
+            if os.environ.get('SURVEY_DEBUG') and s_ <= 0x2aad30 < a_ + 1: print('gap overlapping 2aad30: round %d [%08x, %08x)' % (rnd, s_, a_))
             p_ = next((t_ for t_ in range(s_, min(s_ + 4, a_)) if t_ in term_ends), s_)   # operand bytes of the final ret/jmp are not in `seen`: start after the terminator
             while p_ < a_ and rd(p_, 1) in (bytes([0xcc]), bytes([0x90]), bytes([0])): p_ += 1
+            if os.environ.get('SURVEY_DEBUG') and any(int(x_, 16) == p_ for x_ in os.environ['SURVEY_DEBUG'].split(',') if x_.strip()): print('gap debug round %d: gap [%08x, %08x) start %08x terminator-before=%s in-funcs=%s' % (rnd, s_, a_, p_, any(t_ in term_ends for t_ in range(s_, p_ + 1)), p_ in funcs))
             if not any(t_ in term_ends for t_ in range(s_, p_ + 1)) or a_ - p_ < 4 or p_ in funcs: continue   # only directly after a function terminator
             b0 = rd(p_, 3); first = next(md.disasm(rd(p_, 16), p_, 1), None)
             if first is None: continue
@@ -207,3 +209,6 @@ print('privileged/system:', priv)
 os.makedirs('work/lift', exist_ok=True)
 open('work/lift/funcs.txt', 'w').write('\n'.join('%08x' % f for f in sorted(funcs)))
 print('wrote work/lift/funcs.txt (%d functions)' % len(funcs))
+for ds_ in os.environ.get('SURVEY_DEBUG', '').split(','):   # SURVEY_DEBUG=<hex addr>[,...]: why is (or is not) this address a function entry?
+    if ds_.strip():
+        d_ = int(ds_, 16); print('  seen instruction starts in [%08x, %08x): %s' % (d_, d_ + 0x80, [hex(x_) for x_ in range(d_, d_ + 0x80) if x_ in seen][:12])); print('survey debug %08x: seen=%s funcs=%s branch-target=%s jump-table-target=%s after-terminator=%s' % (d_, d_ in seen, d_ in funcs, d_ in btargets, d_ in jtargets, d_ in term_ends))
