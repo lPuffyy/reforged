@@ -16,6 +16,7 @@
 extern "C" int ReforgedMain(int argc, char** argv);
 extern "C" void ReforgedSetMetalLayer(void* layer);
 extern "C" int ReforgedFpsTenths();
+extern "C" void ReforgedSetPaused(int paused);
 
 // A view whose backing layer is a CAMetalLayer, which the Vulkan renderer draws into.
 @interface ReforgedView : UIView
@@ -98,6 +99,10 @@ extern "C" int ReforgedFpsTenths();
   dispatch_async(dispatch_get_main_queue(), ^{ [vc presentViewController:self.libraryNav animated:NO completion:nil]; });
   return YES;
 }
+
+// The runtime must not submit GPU work while the app is not in the foreground, and it rebuilds its window surface when the app comes back.
+- (void)applicationWillResignActive:(UIApplication*)application { ReforgedSetPaused(1); }
+- (void)applicationDidBecomeActive:(UIApplication*)application { ReforgedSetPaused(0); }
 
 // Saved settings first, then Documents/reforged.env (one KEY=VALUE per line, # starts a comment; each becomes an environment variable), which wins.
 - (void)applyEnvironment {

@@ -664,11 +664,16 @@ static void WriteDump(int flip, const DumpReq& d) {
   fclose(f);
 }
 
+// App lifecycle (iOS): while the app is not in the foreground no GPU work may be submitted, and the window surface can come back different (a stale swapchain
+// leaves the picture frozen). ReforgedSetPaused(1) makes the next frame wait; when it resumes, or when acquiring or presenting fails, the swapchain is rebuilt.
+static std::atomic<int> g_paused{0}; static bool g_swapDirty = false;
+extern "C" void ReforgedSetPaused(int paused) { g_paused = paused; }
 static std::atomic<int> g_fpsTenths{0}; static std::atomic<uint64_t> g_fpsStamp{0};   // frame rate over the last half second, and when it was measured
 extern "C" int ReforgedFpsTenths() {   // frames per second times ten (0 when nothing has been drawn for a moment); read by the app's frame counter
   uint64_t st = g_fpsStamp.load(); return st && NowUs() - st < 1500000 ? g_fpsTenths.load() : 0;
 }
 void GpuFlip() {
+  if (g_paused.load() && g_ok && g_dev) { vkDeviceWaitIdle(g_dev); Log("[vk] paused (app not in the foreground)"); while (g_paused.load()) plat::SleepMs(15); g_swapDirty = true; Log("[vk] resumed"); }
   uint64_t t = NowUs(); if (!g_statT0) g_statT0 = t;
   { static uint64_t t0 = 0; static int n = 0; ++n; if (!t0) t0 = t; if (t - t0 >= 500000) { g_fpsTenths = (int)((uint64_t)n * 10000000ull / (t - t0)); g_fpsStamp = t; n = 0; t0 = t; } }
   GpuFlipImpl();
@@ -688,10 +693,17 @@ static void GpuFlipImpl() {
     if (cs) { int a = 0, b = 0, after = 0; sscanf(cs, "%d,%d,%d", &a, &b, &after); if ((int)((uint32_t)plat::TickMs() - t0) > after * 1000) { if (base < 0) base = g_dbgFlips; int c = a + (g_dbgFlips - base); g_capSweep = c <= b ? c : -1; } } }
   if (!g_ok) return;
   Frame& fr = F(); if (!fr.recording) { BeginFrame(); }
+  if (g_swapDirty && g_swap) { vkDeviceWaitIdle(g_dev); vkDestroySwapchainKHR(g_dev, g_swap, nullptr); g_swap = VK_NULL_HANDLE; g_swapImages.clear(); g_swapLayouts.clear(); Log("[vk] swapchain dropped, creating a new one"); }
+  g_swapDirty = false;
   if (!g_rt || !EnsureSwapchain()) { EndRendering(); vkEndCommandBuffer(fr.cb); fr.recording = false; VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO}; si.commandBufferCount = 1; si.pCommandBuffers = &fr.cb; vkResetFences(g_dev, 1, &fr.fence); vkQueueSubmit(g_queue, 1, &si, fr.fence); g_fi ^= 1; ++g_frameNo; return; }
   EndRendering(); VkCommandBuffer cb = fr.cb;
   uint32_t ix = 0; VkResult ar = vkAcquireNextImageKHR(g_dev, g_swap, ~0ull, fr.imageAvail, VK_NULL_HANDLE, &ix);
-  if (ar != VK_SUCCESS && ar != VK_SUBOPTIMAL_KHR) { Log("[vk] acquire failed %d", (int)ar); }
+  if (ar != VK_SUCCESS && ar != VK_SUBOPTIMAL_KHR) {   // no image to draw into: finish the frame without presenting and build a new swapchain for the next one
+    static int fails = 0; if (fails++ < 20) Log("[vk] acquire failed %d: rebuilding the swapchain", (int)ar);
+    g_swapDirty = true; vkEndCommandBuffer(cb); fr.recording = false; VkSubmitInfo si0{VK_STRUCTURE_TYPE_SUBMIT_INFO}; si0.commandBufferCount = 1; si0.pCommandBuffers = &cb; vkResetFences(g_dev, 1, &fr.fence); vkQueueSubmit(g_queue, 1, &si0, fr.fence);
+    g_fi ^= 1; ++g_frameNo; g_rendering = false; return;
+  }
+  if (ar == VK_SUBOPTIMAL_KHR) g_swapDirty = true;
   Img& rtc = g_rt->color; Barrier(cb, rtc, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
   VkImageMemoryBarrier sb{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER}; sb.oldLayout = g_swapLayouts[ix]; sb.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL; sb.srcQueueFamilyIndex = sb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED; sb.image = g_swapImages[ix];
   sb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}; sb.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT; vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &sb);
@@ -736,6 +748,6 @@ static void GpuFlipImpl() {
   if (lumPtr) { vkWaitForFences(g_dev, 1, &fr.fence, VK_TRUE, ~0ull); double sum = 0; size_t n = (size_t)lumW * lumH; for (size_t i = 0; i < n; i += 7) sum += lumPtr[i * 4] + lumPtr[i * 4 + 1] + lumPtr[i * 4 + 2];
     if (darkNow) { static double prev = 0; static int caps = 0; double m = sum / (n / 7 + 1) / 3; if (prev >= 20 && m < 8 && caps < 8 && g_dbgFlips > 1200) { ++caps; g_darkArm = g_dbgFlips + 1; Log("[dark] screen went from mean %.1f to %.1f at flip %d: logging the next two frames", prev, m, g_dbgFlips); } prev = m; }
     if (lumOn) Log("[lum] flip %d cap %d tailK %d ovCap %d lastframe-draws %d mean %.2f", g_dbgFlips, g_capSweep, g_tailK, g_ovCap, g_lastFrameDraws, sum / (n / 7 + 1) / 3); }
-  VkPresentInfoKHR pi{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR}; pi.waitSemaphoreCount = 1; pi.pWaitSemaphores = &fr.renderDone; pi.swapchainCount = 1; pi.pSwapchains = &g_swap; pi.pImageIndices = &ix; vkQueuePresentKHR(g_queue, &pi);
+  VkPresentInfoKHR pi{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR}; pi.waitSemaphoreCount = 1; pi.pWaitSemaphores = &fr.renderDone; pi.swapchainCount = 1; pi.pSwapchains = &g_swap; pi.pImageIndices = &ix; VkResult pr = vkQueuePresentKHR(g_queue, &pi); if (pr != VK_SUCCESS && pr != VK_SUBOPTIMAL_KHR) { static int pf = 0; if (pf++ < 20) Log("[vk] present failed %d: rebuilding the swapchain", (int)pr); g_swapDirty = true; }
   g_fi ^= 1; ++g_frameNo; g_rendering = false;
 }
