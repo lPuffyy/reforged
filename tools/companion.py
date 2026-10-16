@@ -202,7 +202,7 @@ def main():
     ap.add_argument('--title-data', default='', help='folder of per-title files (patches.txt, fs_patches.txt, ...) to add to the app; they replace generated files of the same name')
     ap.add_argument('--pubkey', default=RELEASE_PUBLIC_KEY, help='release signing public key (hex)')
     ap.add_argument('--work', default='', help='working directory (default: a temporary one)')
-    ap.add_argument('--add-to', default='', help='an existing personal app: add this game to it (the games already in it stay) instead of starting from the downloaded app. Together with --ipa <newer app> the games of this app are moved into the newer app without rebuilding them (use apps from the same release series)')
+    ap.add_argument('--add-to', action='append', default=[], help='an existing personal app: add this game to it (the games already in it stay) instead of starting from the downloaded app. Repeat it to bring the games of several apps together. Together with --ipa <newer app> the games are moved into the newer app without rebuilding them (use apps from the same release series). A game that is already in one of these apps is reused, not rebuilt')
     ap.add_argument('--relay', default='', help='host[:port] of a System Link relay to build in as this app\'s default (players can change or turn it off in the app); it is not a default for anyone else')
     ap.add_argument('--relay-room', default='', help='the default room name for --relay')
     ap.add_argument('--keep', action='store_true')
@@ -227,65 +227,91 @@ def main():
     xbe_path = os.path.join(work, 'default.xbe'); open(xbe_path, 'wb').write(xbe)
     title = os.path.join(work, 'title'); os.makedirs(title, exist_ok=True)
 
-    say(2, steps, 'getting the app')
-    if a.add_to and a.ipa: base = open(a.ipa, 'rb').read(); print('  moving the games of %s into the app %s' % (a.add_to, a.ipa))
-    elif a.add_to: base = open(a.add_to, 'rb').read(); print('  adding to your existing app: %s' % a.add_to)
-    elif a.ipa: base = open(a.ipa, 'rb').read()
-    else: base = download_release_ipa(a.pubkey)
-
-    say(3, steps, "preparing the toolchain")
-    if a.clang or a.lld:
-        tc = {'clang': a.clang or 'clang++', 'lld': a.lld, 'scanner': a.xbsym_cli, 'sse2neon': a.sse2neon}
-    else:
-        tc = pack_paths(a.toolchain or get_toolchain(a.pubkey))
-        for k in ('clang', 'lld'):
-            if not os.path.exists(tc[k]): die('the toolchain is missing %s' % tc[k])
-    if a.xbsym_cli: tc['scanner'] = a.xbsym_cli
-    if a.sse2neon: tc['sse2neon'] = a.sse2neon
-    print('  ok')
-
-    say(4, steps, "finding the game's audio and controller routines")
-    if a.skip_symbols or not tc.get('scanner') or not os.path.exists(tc['scanner']): print('  skipped' + ('' if a.skip_symbols else ' (no symbol scanner available: the game will run without its own audio and controller hooks)'))
-    else:
-        n = scan_symbols(xbe_path, tc['scanner'], os.path.join(work, 'xbsym.txt'))
-        print('  %d symbols' % n)
-        rc, out = run_tool('gen_title_data.py', ['--xbe', xbe_path, '--xbsym', os.path.join(work, 'xbsym.txt'), '--out', title])
-        if rc != 0: die('could not build the title data:\n' + out)
-        print('  ' + out.strip().splitlines()[-1])
-
-    apply_known_patches(xbe, title)
-    if a.title_data:
-        os.makedirs(title, exist_ok=True)
-        for f in sorted(os.listdir(a.title_data)):
-            src = os.path.join(a.title_data, f)
-            if os.path.isfile(src) and f.lower().endswith('.txt'): shutil.copyfile(src, os.path.join(title, f)); print('  title data: %s' % f)
-    say(5, steps, 'translating the game code on this computer')
-    rc, out = run_tool('lift_survey.py', [xbe_path], cwd=work)
-    if rc != 0: die('survey failed:\n' + out[-2000:])
-    rc, out = run_tool('lift.py', [xbe_path, '--out', os.path.join('work', 'lift', 'gen'), '--patches', os.path.join(title, 'patches.txt')], cwd=work)   # the translated code must include the title's byte patches
-    if rc != 0: die('translation failed:\n' + out[-2000:])
-    print('  ' + [l for l in out.splitlines() if l.startswith('lifted')][-1])
-
-    say(6, steps, 'building the game module (this is the slow step)')
-    module = os.path.join(work, 'reforged_game.dylib')
-    margs = ['--gen', os.path.join(work, 'work', 'lift', 'gen'), '--out', module, '--clang', tc['clang'], '--ld', a.ld]
-    if tc.get('lld'): margs += ['--lld', tc['lld']]
-    if tc.get('sse2neon'): margs += ['--sse2neon', tc['sse2neon']]
-    rc, out = run_tool('build_module.py', margs)
-    print(out[-600:].rstrip())
-    if rc != 0: die('the module did not build')
-
-    say(7, steps, 'writing your personal app')
     import hashlib, xbe_meta
     gid = hashlib.sha256(xbe).hexdigest(); g16 = gid[:16]
     meta = xbe_meta.read_meta(xbe)
+
+    say(2, steps, 'getting the app')
+    for f in a.add_to:
+        if not os.path.exists(f): die('%s does not exist' % f)
+    if a.add_to and a.ipa: base = open(a.ipa, 'rb').read(); print('  moving the games of %s into the app %s' % (', '.join(a.add_to), a.ipa))
+    elif a.add_to: base = open(a.add_to[0], 'rb').read(); print('  adding to your existing app: %s' % a.add_to[0])
+    elif a.ipa: base = open(a.ipa, 'rb').read()
+    else: base = download_release_ipa(a.pubkey)
+    # the games that are already in the apps given with --add-to
+    manifest, files, drop = {'version': 1, 'games': []}, {}, []
+    def merge_in(m2, f2):
+        by_id = {g['id']: g for g in manifest['games']}
+        for g in m2['games']: by_id[g['id']] = g
+        manifest['games'] = list(by_id.values()); files.update(f2)
+        if 'relay' in m2 and 'relay' not in manifest: manifest['relay'] = m2['relay']
+    if a.add_to and a.ipa:
+        for f in a.add_to: m2, f2, _ = library_from_app(open(f, 'rb').read(), carry_all=True); merge_in(m2, f2)
+    elif a.add_to:
+        manifest, files, drop = library_from_app(base)
+        for f in a.add_to[1:]: m2, f2, _ = library_from_app(open(f, 'rb').read(), carry_all=True); merge_in(m2, f2)
+    else: manifest, files, drop = library_from_app(base)   # an older single-game app is converted
+    module_key = 'Frameworks/game-%s.dylib' % g16
+    in_base = module_key in set(n.split('.app/', 1)[-1] for n in zipfile.ZipFile(io.BytesIO(base)).namelist()) if not (a.add_to and a.ipa) else False
+    reuse = any(g.get('id') == gid for g in manifest['games']) and (module_key in files or in_base)
+    if reuse: print('  this game is already in the app: its translated code is reused (nothing to rebuild)')
+
+    module = os.path.join(work, 'reforged_game.dylib')
+    if reuse:
+        steps_note = 'skipped: the game is already built'
+        say(3, steps, 'preparing the toolchain'); print('  ' + steps_note)
+        say(4, steps, "finding the game's audio and controller routines"); print('  ' + steps_note)
+        say(5, steps, 'translating the game code on this computer'); print('  ' + steps_note)
+        say(6, steps, 'building the game module'); print('  ' + steps_note)
+    else:
+        say(3, steps, "preparing the toolchain")
+        if a.clang or a.lld:
+            tc = {'clang': a.clang or 'clang++', 'lld': a.lld, 'scanner': a.xbsym_cli, 'sse2neon': a.sse2neon}
+        else:
+            tc = pack_paths(a.toolchain or get_toolchain(a.pubkey))
+            for k in ('clang', 'lld'):
+                if not os.path.exists(tc[k]): die('the toolchain is missing %s' % tc[k])
+        if a.xbsym_cli: tc['scanner'] = a.xbsym_cli
+        if a.sse2neon: tc['sse2neon'] = a.sse2neon
+        print('  ok')
+
+        say(4, steps, "finding the game's audio and controller routines")
+        if a.skip_symbols or not tc.get('scanner') or not os.path.exists(tc['scanner']): print('  skipped' + ('' if a.skip_symbols else ' (no symbol scanner available: the game will run without its own audio and controller hooks)'))
+        else:
+            n = scan_symbols(xbe_path, tc['scanner'], os.path.join(work, 'xbsym.txt'))
+            print('  %d symbols' % n)
+            rc, out = run_tool('gen_title_data.py', ['--xbe', xbe_path, '--xbsym', os.path.join(work, 'xbsym.txt'), '--out', title])
+            if rc != 0: die('could not build the title data:\n' + out)
+            print('  ' + out.strip().splitlines()[-1])
+
+        apply_known_patches(xbe, title)
+        if a.title_data:
+            os.makedirs(title, exist_ok=True)
+            for f in sorted(os.listdir(a.title_data)):
+                src = os.path.join(a.title_data, f)
+                if os.path.isfile(src) and f.lower().endswith('.txt'): shutil.copyfile(src, os.path.join(title, f)); print('  title data: %s' % f)
+        say(5, steps, 'translating the game code on this computer')
+        rc, out = run_tool('lift_survey.py', [xbe_path], cwd=work)
+        if rc != 0: die('survey failed:\n' + out[-2000:])
+        rc, out = run_tool('lift.py', [xbe_path, '--out', os.path.join('work', 'lift', 'gen'), '--patches', os.path.join(title, 'patches.txt')], cwd=work)   # the translated code must include the title's byte patches
+        if rc != 0: die('translation failed:\n' + out[-2000:])
+        print('  ' + [l for l in out.splitlines() if l.startswith('lifted')][-1])
+
+        say(6, steps, 'building the game module (this is the slow step)')
+        margs = ['--gen', os.path.join(work, 'work', 'lift', 'gen'), '--out', module, '--clang', tc['clang'], '--ld', a.ld]
+        if tc.get('lld'): margs += ['--lld', tc['lld']]
+        if tc.get('sse2neon'): margs += ['--sse2neon', tc['sse2neon']]
+        rc, out = run_tool('build_module.py', margs)
+        print(out[-600:].rstrip())
+        if rc != 0: die('the module did not build')
+
+    say(7, steps, 'writing your personal app')
     print('  game: %s%s' % (meta.get('name') or 'unnamed', (' (title id %s)' % meta['title_id']) if meta.get('title_id') else ''))
-    if a.add_to and a.ipa: manifest, files, drop = library_from_app(open(a.add_to, 'rb').read(), carry_all=True)   # the games of the old app, carried into the new one
-    else: manifest, files, drop = library_from_app(base)   # games already in the app (an older single-game app is converted)
-    files['Frameworks/game-%s.dylib' % g16] = open(module, 'rb').read()
-    files['Games/%s/title/default.xbe' % g16] = xbe
-    for f in os.listdir(title): files['Games/%s/title/%s' % (g16, f)] = open(os.path.join(title, f), 'rb').read()
-    if a.no_disc: files['Games/%s/title/no-disc.txt' % g16] = b'no disc needed' + bytes([10])
+    if not reuse:
+        files[module_key] = open(module, 'rb').read()
+        files['Games/%s/title/default.xbe' % g16] = xbe
+        for f in os.listdir(title): files['Games/%s/title/%s' % (g16, f)] = open(os.path.join(title, f), 'rb').read()
+        if a.no_disc: files['Games/%s/title/no-disc.txt' % g16] = b'no disc needed' + bytes([10])
     if meta.get('icon_png'): files['Games/%s/icon.png' % g16] = meta['icon_png']
     entry = game_entry(gid, meta, a.no_disc)
     old = next((g for g in manifest['games'] if g.get('id') == gid), None)
@@ -297,7 +323,7 @@ def main():
     files['Games/games.json'] = json.dumps(manifest, indent=1).encode('utf-8')
     print('  the app now holds %d game(s): %s' % (len(manifest['games']), ', '.join(g.get('name', '?') for g in manifest['games'])))
     if a.out: out_path = a.out
-    elif a.add_to: out_path = os.path.join(os.path.dirname(os.path.abspath(a.add_to)), os.path.splitext(os.path.basename(a.add_to))[0] + '-library.ipa')
+    elif a.add_to: out_path = os.path.join(os.path.dirname(os.path.abspath(a.add_to[0])), os.path.splitext(os.path.basename(a.add_to[0]))[0] + '-library.ipa')
     else: out_path = os.path.join(os.path.dirname(os.path.abspath(iso)), os.path.splitext(os.path.basename(iso))[0] + '-personal.ipa')
     write_personal_ipa(base, out_path, files, drop)
     print('\nDone: %s' % out_path)
