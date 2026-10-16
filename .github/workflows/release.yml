@@ -100,8 +100,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           (cd companion && sha256sum reforged-companion-* > ../companion.sha256)
+          NOTES=docs/RELEASE_NOTES_$GITHUB_REF_NAME.md
+          if [ -f "$NOTES" ]; then cp "$NOTES" notes.md; else echo "Generic app (contains no game code). Use the companion tool to build your personal copy from a disc you own; do not install this file on its own. See docs/USAGE.md." > notes.md; fi
+          printf '\n\nSignature: Ed25519, public key `%s`. SHA-256 is in the .sha256 file.\n' "$PUBLIC_KEY" >> notes.md
           gh release create "$GITHUB_REF_NAME" "$IPA_NAME" "$IPA_NAME.sig" "$IPA_NAME.sha256" companion/reforged-companion-* companion.sha256 \
             --title "Reforged $GITHUB_REF_NAME" \
-            --notes "Generic app (contains no game code). Use the companion tool to build your personal copy from a disc you own; do not install this file on its own.
-
-          Signature: Ed25519, public key \`$PUBLIC_KEY\`. SHA-256 is in the .sha256 file."
+            --notes-file notes.md

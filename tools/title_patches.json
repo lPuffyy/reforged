@@ -1,0 +1,8 @@
+{
+  "_about": "Small byte patches the runtime needs for a specific build of a program, keyed by the SHA-256 of its main executable (default.xbe). Each patch overwrites bytes at a virtual address after load. Only programs listed here get patches; anything else is translated unmodified. Nothing here contains program code beyond a few replacement bytes.",
+  "03215919bb7163259257d361f4c7bf802a7ab12aa85e2689436369b5c427935d": {
+    "patches": [
+      {"address": "0x55810", "bytes": "33C0C3", "why": "voice-chat engine init needs audio-processor voice tables the runtime does not provide; report 'no voice engine' (xor eax,eax; ret)"}
+    ]
+  }
+}

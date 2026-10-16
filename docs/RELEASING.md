@@ -20,6 +20,16 @@ git push origin v0.1.0
 ```
 The workflow builds the unsigned app, signs it, checks the signature with the companion's own verifier, and publishes `Reforged-v0.1.0.ipa`, its `.sig` and its `.sha256`.
 
+## Before tagging a release (checklist)
+1. CI is green on the commit to tag (all platforms, the Simulator test, the companion, signing and toolchain checks).
+2. Build a personal app **with no private files** (`--title-data` omitted) from the newest preview build and play it on a real device: boot, a level start, and the
+   in-game menus. The companion should print "known build" for the tested disc.
+3. Read `docs/USAGE.md` against the actual behaviour (file names, steps, controls, known problems) and fix anything stale. Update `docs/RELEASE_NOTES_v0.1.0.md`
+   (the release workflow uses it as the release text).
+4. `python -I tools/check_clean.py` passes: no game names, game-derived files or keys in tracked files.
+5. The release secret and public key are in place (see one-time setup) and the companion in the release verifies the signed app.
+6. Tag and push (below). After the workflow finishes, download the released companion for one OS and run it once against a test program.
+
 ## What is in the app
 The runtime, the iOS shell and the Vulkan-on-Metal layer (MoltenVK, Apache-2.0, pinned by SHA-256 in `ios/build_ipa.sh`, license included in the bundle).
 Nothing game-derived. The personal copy made by the companion adds the game module and executable on the user's computer.

@@ -108,6 +108,10 @@ extern "C" void ReforgedSetMetalLayer(void* layer);
 
   if ([fm fileExistsAtPath:[bundle stringByAppendingPathComponent:@"title/no-disc.txt"]]) { [self runWithIso:@"none" xbe:self.xbe seconds:"86400"]; return YES; }   // programs that need no disc (test programs, homebrew)
   NSString* iso = [docs stringByAppendingPathComponent:@"game.iso"];
+  if (![fm fileExistsAtPath:iso]) {   // any disc image copied into the app's Documents folder (Files app / Finder file sharing) is used, whatever it is called
+    for (NSString* name in [[fm contentsOfDirectoryAtPath:docs error:nil] sortedArrayUsingSelector:@selector(compare:)]) {
+      NSString* ext = name.pathExtension.lowercaseString; if (([ext isEqualToString:@"iso"] || [ext isEqualToString:@"xiso"]) && ![name hasSuffix:@".tmp"]) { iso = [docs stringByAppendingPathComponent:name]; break; } }
+  }
   if ([fm fileExistsAtPath:iso]) { [self runWithIso:iso xbe:self.xbe seconds:"86400"]; return YES; }
   NSString* remembered = [self rememberedDisc];
   if (remembered) { [self runWithIso:remembered xbe:self.xbe seconds:"86400"]; return YES; }

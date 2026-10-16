@@ -32,6 +32,21 @@ def run_tool(script, args, cwd=None):
     return p.returncode, p.stdout
 
 
+def apply_known_patches(xbe, title):
+    """Writes patches.txt for builds listed in tools/title_patches.json (keyed by the SHA-256 of the main executable). Unlisted builds are translated unmodified."""
+    import hashlib, json
+    digest = hashlib.sha256(xbe).hexdigest()
+    try: table = json.load(open(os.path.join(HERE, 'title_patches.json'), encoding='utf-8'))
+    except (OSError, ValueError): table = {}
+    entry = table.get(digest)
+    if not entry:
+        print('  note: this build is not one the project has tested (executable hash %s...); it is translated without patches and may not run' % digest[:12]); return
+    with open(os.path.join(title, 'patches.txt'), 'w') as f:
+        f.write('# addr  hex bytes written over the image after load (from title_patches.json)'+chr(10))
+        for p in entry.get('patches', []): f.write('%x %s' % (int(p['address'], 16), p['bytes']) + chr(10))
+    print('  known build: %d patch(es) applied' % len(entry.get('patches', [])))
+
+
 # ---- release download and verification ----
 def http_get(url, max_bytes=2_000_000_000):
     req = urllib.request.Request(url, headers={'User-Agent': 'reforged-companion'})
@@ -183,6 +198,7 @@ def main():
         if rc != 0: die('could not build the title data:\n' + out)
         print('  ' + out.strip().splitlines()[-1])
 
+    apply_known_patches(xbe, title)
     if a.title_data:
         os.makedirs(title, exist_ok=True)
         for f in sorted(os.listdir(a.title_data)):
@@ -219,4 +235,15 @@ def main():
 if __name__ == '__main__':
     if len(sys.argv) >= 3 and sys.argv[1] == '--tool':   # frozen builds run the bundled tools through themselves
         import runpy; script = os.path.join(HERE, sys.argv[2]); sys.argv = [script] + sys.argv[3:]; runpy.run_path(script, run_name='__main__'); sys.exit(0)
-    main()
+    # Started by double-click (a frozen program with no arguments): keep the window open at the end so the result or the error can be read.
+    pause = getattr(sys, 'frozen', False) and len(sys.argv) == 1
+    code = 0
+    try: main()
+    except SystemExit as e: code = e.code if isinstance(e.code, int) else (1 if e.code else 0)
+    except KeyboardInterrupt: print('\nstopped'); code = 1
+    except Exception as e:
+        import traceback; traceback.print_exc(); print('\nerror: %s\nIf this keeps happening, please report it (without the disc image or the files made from it).' % e); code = 1
+    if pause:
+        try: input('\nPress Enter to close this window.')
+        except EOFError: pass
+    sys.exit(code)

@@ -2,10 +2,9 @@
 
 A portable runtime and static translator for running original-hardware console software you own, on modern devices.
 
-**Status: early engineering preview.** A real retail title boots and plays on Windows (x64) and, as of the latest builds, on an iPhone
-(A17 Pro): title screen, menus and a multiplayer match run at about 28 frames per second from a personal app built on the user's own machine.
-Known problems: some post-processing colours are wrong on the phone's GPU path, some surfaces render white, and some campaign levels hang on load.
-See [docs/PORTING.md](docs/PORTING.md) for the open work.
+**Status: early engineering preview.** One real retail title boots and plays on Windows (x64) and on an iPhone (A17 Pro): menus, campaign and multiplayer
+run at the game's 30 frames per second from a personal app built on the user's own machine. Known problems: occasional wrong lighting or post-processing on
+the phone's GPU path, and some levels untested. See **[docs/USAGE.md](docs/USAGE.md)** to get it running and [docs/PORTING.md](docs/PORTING.md) for the open work.
 
 ## What this is not
 - It contains **no game code, no console firmware, no keys and no assets.** You bring your own legally obtained disc image.
@@ -31,7 +30,10 @@ Releases are signed with an Ed25519 key; the companion checks the signature on w
 [docs/RELEASING.md](docs/RELEASING.md).
 
 Until the first release exists, CI publishes unsigned *preview* builds (generic app and toolchain packs, no game code) as pre-releases that the
-companion can use with `--ipa` and `--toolchain`. Per-title files the scanner cannot derive can be passed with `--title-data`.
+companion can use with `--ipa` and `--toolchain`. Small per-program byte patches live in `tools/title_patches.json`, keyed by the SHA-256 of the main
+executable (a program that is not listed is translated without patches); `--title-data` still accepts a folder of your own files.
+
+Full instructions, controls, settings and troubleshooting: **[docs/USAGE.md](docs/USAGE.md)**. A multi-game library is planned (see [docs/COMPANION.md](docs/COMPANION.md)).
 
 ## Layout
 | Path | What |
@@ -39,7 +41,7 @@ companion can use with `--ipa` and `--toolchain`. Per-title files the scanner ca
 | `src/` | Runtime: kernel HLE, memory model, translated-code runtime (`lift_rt`), GPU/audio/net/input layers |
 | `tools/` | Survey, translator, companion tool, module builder, kernel stub generator, XBE/ISO inspection, LAN relay |
 | `ios/` | The iOS app shell (UIKit, Metal layer via MoltenVK, touch controls, disc picker) and the IPA build script |
-| `docs/` | Legal rules, porting notes, companion design, release process |
+| `docs/` | Usage guide, legal rules, porting notes, companion design, release process |
 
 ## Building
 The runtime builds with CMake on Windows, Linux and macOS (arm64 and x64); the iOS app builds with the Xcode generator (`ios/build_ipa.sh`, unsigned).

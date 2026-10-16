@@ -33,3 +33,24 @@ Status: implemented and used on a real device (see PORTING.md for what a first r
 - Release signing key: who holds it, and how it is rotated.
 - Whether to also publish a "module only" download for users who already have the app (probably not: it would be game-derived).
 - Minimum iOS version to target.
+
+## Per-program patches
+A few programs need small byte patches (for example, skipping an engine the runtime does not provide). They are listed in `tools/title_patches.json`, keyed by
+the SHA-256 of the program's main executable, with an address and replacement bytes. The companion writes them to `title/patches.txt` before translating, so
+the translated code includes them. A program not in the table is translated unmodified and the tool says so. The file holds hashes, addresses and a few bytes
+only; adding a program means adding its hash and patches after testing it. `--title-data <folder>` overrides any file of the same name.
+
+## Multi-game library (planned)
+Constraint: iOS only runs code that is signed into the app, so every game module must be inside the app bundle when it is sideloaded; nothing can be
+downloaded into the app's folder later.
+
+Plan:
+- **Bundle layout:** `Games/<id>/` per game (module, `title/` files), where `<id>` is the hash of the game's main executable, plus a small `games.json` manifest.
+  Single-game apps keep working (a manifest with one entry).
+- **App:** a launch screen lists installed games. Each game has its own disc image (found in the app's Documents folder or picked with the Files picker, remembered
+  per game) and its own save and settings folders. The runtime keeps global state and cannot unload a module, so choosing a different game relaunches the app.
+- **Companion:** keeps a cache of built modules keyed by hash; `--add-to <personal ipa>` builds only the new game and repackages everything into one personal app,
+  so the earlier games are not rebuilt. One app instead of one per game keeps the number of sideloaded apps (limited on free Apple IDs) down.
+- **Costs:** each game adds roughly 130 MB to the installed app, and adding a game means reinstalling the app (saves stay if the app identity is unchanged).
+- **Compatibility:** each new game will need its own testing and patch entries; the table above is per executable hash for that reason.
+
