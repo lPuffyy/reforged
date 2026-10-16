@@ -1,7 +1,7 @@
 # Using Reforged on an iPhone or iPad
 
 This guide takes you from nothing to a running game on your own device. It assumes you own the disc you are going to use and have made an image of it
-yourself (see [LEGAL.md](LEGAL.md)). Reforged contains no game code, firmware, keys or assets, and never will.
+yourself (see [LEGAL.md](LEGAL.md)). To compile the project yourself instead, see [BUILDING.md](BUILDING.md). Reforged contains no game code, firmware, keys or assets, and never will.
 
 **Status: early engineering preview.** One test title is known to run (about 28 frames per second on a recent iPhone). Other titles are untested and
 will probably need work. Expect rough edges, and read [Known problems](#known-problems) first.
@@ -40,7 +40,10 @@ Copy your `.iso` into the same folder. If the folder has more than one `.iso`, t
 When it finishes it prints the path of the file it made, `<your image name>-personal.ipa`, next to the disc image.
 
 ### 4. Install the personal app
-Open `*-personal.ipa` with AltStore, SideStore or Sideloadly and install it, as you would any sideloaded app. Keep this file private.
+Open `*-personal.ipa` with your sideloading tool and install it, as you would any sideloaded app. Keep this file private. Each tool has its own install guide:
+- [AltStore](https://faq.altstore.io) (needs AltServer running on a computer on the same network to refresh apps)
+- [SideStore](https://docs.sidestore.io) (refreshes on the device itself after setup)
+- [Sideloadly](https://sideloadly.io) (a desktop app; you reinstall every 7 days with a free Apple ID)
 
 ### 5. Give the app your disc image
 Pick one:

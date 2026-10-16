@@ -6,6 +6,16 @@ A portable runtime and static translator for running original-hardware console s
 run at the game's 30 frames per second from a personal app built on the user's own machine. Known problems: occasional wrong lighting or post-processing on
 the phone's GPU path, and some levels untested. See **[docs/USAGE.md](docs/USAGE.md)** to get it running and [docs/PORTING.md](docs/PORTING.md) for the open work.
 
+## Start here
+| I want to... | Go to |
+|---|---|
+| **Play** on an iPhone or iPad | [docs/USAGE.md](docs/USAGE.md): the step-by-step guide |
+| **Sideload** the app (install it without the App Store) | [AltStore guide](https://faq.altstore.io), [SideStore guide](https://docs.sidestore.io), [Sideloadly](https://sideloadly.io) |
+| See **what has been tested** | [Compatibility list](https://github.com/lPuffyy/reforged-compat) |
+| **Compile** the runtime, the iOS app or the companion myself | [docs/BUILDING.md](docs/BUILDING.md) |
+| Understand the **rules** and the legal basis | [docs/LEGAL.md](docs/LEGAL.md) |
+| See how it **works** and what is still open | [docs/COMPANION.md](docs/COMPANION.md), [docs/PORTING.md](docs/PORTING.md) |
+
 ## What this is not
 - It contains **no game code, no console firmware, no keys and no assets.** You bring your own legally obtained disc image.
 - It is not affiliated with or endorsed by any console maker or game publisher.
@@ -24,7 +34,7 @@ See [docs/LEGAL.md](docs/LEGAL.md).
 ## iOS: the companion tool
 The released app contains no game code. `tools/companion.py` (one file per OS from the release page) takes your disc image and, on your computer:
 reads the executable, scans it for audio and controller routines, translates it, cross-compiles the game module for iOS with a downloaded
-clang + lld, and writes a **personal IPA** next to the disc image. You sideload that file with AltStore, SideStore or Sideloadly and put the disc
+clang + lld, and writes a **personal IPA** next to the disc image. You sideload that file with [AltStore](https://faq.altstore.io), [SideStore](https://docs.sidestore.io) or [Sideloadly](https://sideloadly.io) and put the disc
 image in the app's folder (Files app) or pick it in the app. Nothing it produces is uploaded, and the personal IPA must not be shared.
 Releases are signed with an Ed25519 key; the companion checks the signature on what it downloads. Details: [docs/COMPANION.md](docs/COMPANION.md),
 [docs/RELEASING.md](docs/RELEASING.md).
@@ -43,12 +53,22 @@ Full instructions, controls, settings and troubleshooting: **[docs/USAGE.md](doc
 | `src/` | Runtime: kernel HLE, memory model, translated-code runtime (`lift_rt`), GPU/audio/net/input layers |
 | `tools/` | Survey, translator, companion tool, module builder, kernel stub generator, XBE/ISO inspection, LAN relay |
 | `ios/` | The iOS app shell (UIKit, Metal layer via MoltenVK, touch controls, disc picker) and the IPA build script |
-| `docs/` | Usage guide, legal rules, porting notes, companion design, release process |
+| `docs/` | Usage and building guides, legal rules, porting notes, companion design, release process |
 
 ## Building
-The runtime builds with CMake on Windows, Linux and macOS (arm64 and x64); the iOS app builds with the Xcode generator (`ios/build_ipa.sh`, unsigned).
+Full, step-by-step instructions for every platform are in **[docs/BUILDING.md](docs/BUILDING.md)**. The short version (CMake 3.20+, Python 3.9+, a C++17 compiler):
+```
+git clone https://github.com/lPuffyy/reforged.git
+git clone --depth 1 --branch v1.3.280 https://github.com/KhronosGroup/Vulkan-Headers.git vk-headers
+cd reforged
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DVULKAN_HEADERS_DIR=../vk-headers/include
+cmake --build build --parallel
+build/reforged none none 2      # starts, says it has nothing to load, exits with code 1: the build works
+```
+(Windows: add `--config Release` to the second command; the program is `build/Release/reforged.exe`. arm64 machines also need sse2neon: see the guide.)
+eforged.exe`. arm64 machines also need sse2neon: see the guide.)
 CI runs a hygiene check on every push (`python -I tools/check_clean.py`), builds on four platforms, builds and runs the iOS app in the Simulator
-with an original test program, and tests the companion, signing and toolchain packs. See [docs/PORTING.md](docs/PORTING.md).
+with an original test program, and tests the companion, signing and toolchain packs.
 
 ## Contributing
 Read [docs/LEGAL.md](docs/LEGAL.md) first. Never add game-derived data. Test with homebrew, not retail discs.
