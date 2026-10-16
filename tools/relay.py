@@ -31,6 +31,7 @@ class Relay:
         self.clients = {}   # address -> {'room': key, 'seen': t, 'tokens': float, 'stamp': t}
         self.macs = {}      # (room key, mac) -> address
         self.dropped = 0
+        self.counters = {}   # room key -> [keep-alives, frames in, broadcasts, unicasts, frames out]; counts only, never contents or addresses
 
     def _room_members(self, room): return [a for a, c in self.clients.items() if c['room'] == room]
 
@@ -39,6 +40,15 @@ class Relay:
         if c:
             for k in [k for k, v in self.macs.items() if v == addr]: del self.macs[k]
         return c
+
+    def summary(self):
+        """One line per active room: consoles and what passed through since the last summary (a short hash stands for the room name)."""
+        lines = []
+        for room, cnt in sorted(self.counters.items()):
+            members = len(self._room_members(room))
+            if members or any(cnt): lines.append('room %s: %d console(s); keep-alives %d, frames in %d (%d broadcast, %d unicast), frames out %d' % (hashlib.sha256(room).hexdigest()[:6], members, cnt[0], cnt[1], cnt[2], cnt[3], cnt[4]))
+        self.counters = {}
+        return lines
 
     def expire(self):
         now = self.clock(); gone = [a for a, c in self.clients.items() if now - c['seen'] > self.timeout]
@@ -56,14 +66,15 @@ class Relay:
             if len(self._room_members(room)) >= self.max_room: self.dropped += 1; return []
             if not self._room_members(room) and len({x['room'] for x in self.clients.values()}) >= self.max_rooms: self.dropped += 1; return []
             c = self.clients[addr] = {'room': room, 'seen': now, 'tokens': float(self.rate), 'stamp': now}
-        c['seen'] = now
+        c['seen'] = now; cnt = self.counters.setdefault(room, [0, 0, 0, 0, 0])
         c['tokens'] = min(float(self.rate), c['tokens'] + (now - c['stamp']) * self.rate); c['stamp'] = now
-        if not frame: return []
+        if not frame: cnt[0] += 1; return []
         if len(frame) < 14 or len(frame) > self.max_frame or c['tokens'] < 1: self.dropped += 1; return []
-        c['tokens'] -= 1
+        c['tokens'] -= 1; cnt[1] += 1
         self.macs[(room, bytes(frame[6:12]))] = addr
         dst = bytes(frame[:6]); owner = self.macs.get((room, dst))
         targets = [a for a in self._room_members(room) if a != addr] if (dst[0] & 1 or owner is None) else ([owner] if owner != addr else [])
+        cnt[2 if (dst[0] & 1 or owner is None) else 3] += 1; cnt[4] += len(targets)
         out = MAGIC2 + room + frame if head == HEAD2 else MAGIC1 + frame
         return [(out, t) for t in targets]
 
@@ -77,6 +88,9 @@ def main():
     known = set(); last_stats = time.time()
     while True:
         for g in relay.expire(): print('drop', hashlib.sha256(repr(g).encode()).hexdigest()[:8], flush=True); known.discard(g)
+        if time.time() - last_stats > 60:
+            last_stats = time.time()
+            for line in relay.summary(): print(line, flush=True)
         try: d, addr = s.recvfrom(4096)
         except socket.timeout: continue
         except ConnectionResetError: continue   # Windows reports an ICMP port-unreachable (a client went away) as an error on the next recv
@@ -84,7 +98,6 @@ def main():
             try: s.sendto(pkt, to)
             except OSError: pass
         if addr in relay.clients and addr not in known: known.add(addr); print('join', hashlib.sha256(repr(addr).encode()).hexdigest()[:8], '(%d consoles)' % len(relay.clients), flush=True)
-        if time.time() - last_stats > 600: last_stats = time.time(); print('stats: %d consoles, %d dropped frames' % (len(relay.clients), relay.dropped), flush=True)
 
 
 if __name__ == '__main__': main()
