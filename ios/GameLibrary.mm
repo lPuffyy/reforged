@@ -153,6 +153,8 @@ static NSData* DiscExecutable(NSString* path) {
 
 @implementation RFSettings
 
+// The project's own relay: preset in every copy of the app so System Link over the Internet needs only the switch (it is off until the user turns it on).
+static NSString* const kDefaultRelayServer = @"relay.puffsco.com:3075";
 static NSDictionary* gBundleRelay;   // {server, room, enabled} from Games/games.json, or nil
 + (void)loadBundleDefaults:(NSString*)bundle {
   NSData* data = [NSData dataWithContentsOfFile:[bundle stringByAppendingPathComponent:@"Games/games.json"]]; if (!data) return;
@@ -169,7 +171,7 @@ static NSDictionary* gBundleRelay;   // {server, room, enabled} from Games/games
 + (void)setShowFps:(BOOL)on { [[NSUserDefaults standardUserDefaults] setBool:on forKey:@"showFps"]; }
 + (BOOL)relayEnabled { NSUserDefaults* ud = [NSUserDefaults standardUserDefaults]; if ([ud objectForKey:@"relayEnabled"]) return [ud boolForKey:@"relayEnabled"]; return gBundleRelay ? [gBundleRelay[@"enabled"] boolValue] : NO; }
 + (void)setRelayEnabled:(BOOL)on { [[NSUserDefaults standardUserDefaults] setBool:on forKey:@"relayEnabled"]; [self applyToEnvironment]; }
-+ (NSString*)relayServer { NSString* v = [[NSUserDefaults standardUserDefaults] stringForKey:@"relayServer"]; return v.length ? v : (gBundleRelay[@"server"] ?: @""); }
++ (NSString*)relayServer { NSString* v = [[NSUserDefaults standardUserDefaults] stringForKey:@"relayServer"]; return v.length ? v : (gBundleRelay[@"server"] ?: kDefaultRelayServer); }
 + (void)setRelayServer:(NSString*)server { [[NSUserDefaults standardUserDefaults] setObject:[server stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] forKey:@"relayServer"]; [self applyToEnvironment]; }
 + (NSString*)relayRoom { NSString* v = [[NSUserDefaults standardUserDefaults] stringForKey:@"relayRoom"]; return v.length ? v : ([gBundleRelay[@"room"] isKindOfClass:[NSString class]] ? gBundleRelay[@"room"] : @""); }
 + (void)setRelayRoom:(NSString*)room { [[NSUserDefaults standardUserDefaults] setObject:[room stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] forKey:@"relayRoom"]; [self applyToEnvironment]; }
