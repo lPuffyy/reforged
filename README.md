@@ -66,7 +66,6 @@ cmake --build build --parallel
 build/reforged none none 2      # starts, says it has nothing to load, exits with code 1: the build works
 ```
 (Windows: add `--config Release` to the second command; the program is `build/Release/reforged.exe`. arm64 machines also need sse2neon: see the guide.)
-eforged.exe`. arm64 machines also need sse2neon: see the guide.)
 CI runs a hygiene check on every push (`python -I tools/check_clean.py`), builds on four platforms, builds and runs the iOS app in the Simulator
 with an original test program, and tests the companion, signing and toolchain packs.
 
