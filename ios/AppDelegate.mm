@@ -151,6 +151,7 @@ extern "C" int ReforgedFpsTenths();
   [self.controls controllersChanged];
   [self.libraryNav.presentingViewController dismissViewControllerAnimated:YES completion:nil];
   [self runWithIso:disc xbe:game.xbe seconds:"86400"];
+  [UIApplication sharedApplication].idleTimerDisabled = YES;   // a sleeping screen suspends the app: the game (and any System Link connection) would stop
   [self updateFpsCounter];
 }
 
@@ -165,6 +166,7 @@ extern "C" int ReforgedFpsTenths();
     int rc = ReforgedMain(4, (char**)args);
     dispatch_async(dispatch_get_main_queue(), ^{
       self.label.hidden = NO;
+      [UIApplication sharedApplication].idleTimerDisabled = NO;
       self.label.text = [NSString stringWithFormat:@"Reforged\nthe runtime stopped (code %d)\nclose the app and open it again to play", rc];
     });
   });
