@@ -9,7 +9,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <algorithm>
 #include <map>
+#include <set>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -65,8 +67,67 @@ uint32_t RelayThread(void* ) {
     else if (n > 34 && g_relayRoom && !memcmp(buf, "XRL2", 4) && !memcmp(buf + 4, g_roomKey, 16)) ToGuest(buf + 20, (uint32_t)n - 20);
   }
 }
+// ---- Relay host: the System Link relay (tools/relay.py, same rules) running inside the runtime, so a device can host the relay for the others ----
+// XBOX_RELAY_HOST=<port> starts it; this console then joins its own relay through the loopback address unless XBOX_RELAY names another server.
+// Rooms keep traffic apart, unicast frames follow learned addresses, and limits apply (consoles per room, rooms, frames per second, frame size).
+struct HubClient { uint8_t room[16]; uint32_t seen, stamp; double tokens; };
+std::map<uint64_t, HubClient> g_hubClients;       // key: address and port of the console
+std::map<std::string, uint64_t> g_hubMacs;        // room key + console MAC -> client key
+SOCKET g_hub = INVALID_SOCKET; int g_hubMaxRoom = 16, g_hubMaxRooms = 256, g_hubRate = 600, g_hubPort = 0;
+uint64_t HubKey(const sockaddr_in& a) { return ((uint64_t)ntohl(a.sin_addr.s_addr) << 16) | ntohs(a.sin_port); }
+sockaddr_in HubAddr(uint64_t k) { sockaddr_in a = {}; a.sin_family = AF_INET; a.sin_addr.s_addr = htonl((uint32_t)(k >> 16)); a.sin_port = htons((uint16_t)(k & 0xFFFF)); return a; }
+void HubRemove(uint64_t key) { g_hubClients.erase(key); for (auto it = g_hubMacs.begin(); it != g_hubMacs.end();) it = it->second == key ? g_hubMacs.erase(it) : std::next(it); }
+void HubHandle(const uint8_t* d, int n, const sockaddr_in& from) {
+  const uint8_t* room; const uint8_t* frame; int flen; uint8_t zero[16] = {0};
+  if (n >= 20 && !memcmp(d, "XRL2", 4)) { room = d + 4; frame = d + 20; flen = n - 20; }
+  else if (n >= 4 && !memcmp(d, "XRL1", 4)) { room = zero; frame = d + 4; flen = n - 4; }
+  else return;
+  uint32_t now = (uint32_t)plat::TickMs(); uint64_t key = HubKey(from);
+  auto it = g_hubClients.find(key);
+  if (it != g_hubClients.end() && memcmp(it->second.room, room, 16) != 0) { HubRemove(key); it = g_hubClients.end(); }
+  if (it == g_hubClients.end()) {
+    int members = 0; std::set<std::string> rooms; for (auto& c : g_hubClients) { rooms.insert(std::string((const char*)c.second.room, 16)); if (!memcmp(c.second.room, room, 16)) members++; }
+    if (members >= g_hubMaxRoom || (members == 0 && (int)rooms.size() >= g_hubMaxRooms)) return;
+    HubClient c; memcpy(c.room, room, 16); c.seen = c.stamp = now; c.tokens = g_hubRate; it = g_hubClients.emplace(key, c).first;
+    Log("[relay] a console joined (%d in the relay)", (int)g_hubClients.size());
+  }
+  HubClient& c = it->second; c.seen = now; c.tokens = std::min<double>(g_hubRate, c.tokens + (now - c.stamp) * g_hubRate / 1000.0); c.stamp = now;
+  if (flen <= 0) return;   // a keep-alive
+  if (flen < 14 || flen > 1600 || c.tokens < 1) return;
+  c.tokens -= 1;
+  std::string mk((const char*)room, 16); mk.append((const char*)frame + 6, 6); g_hubMacs[mk] = key;
+  std::string dk((const char*)room, 16); dk.append((const char*)frame, 6);
+  auto owner = g_hubMacs.find(dk); bool uni = !(frame[0] & 1) && owner != g_hubMacs.end();
+  for (auto& o : g_hubClients) {
+    if (o.first == key || memcmp(o.second.room, room, 16) != 0) continue;
+    if (uni && o.first != owner->second) continue;
+    sockaddr_in to = HubAddr(o.first); sendto(g_hub, (const char*)d, n, 0, (sockaddr*)&to, sizeof to);
+  }
+}
+uint32_t HubThread(void*) {
+  uint8_t buf[2200];
+  for (;;) {
+    uint32_t now = (uint32_t)plat::TickMs();
+    for (auto it = g_hubClients.begin(); it != g_hubClients.end();) { if (now - it->second.seen > 30000) { uint64_t k = it->first; ++it; HubRemove(k); Log("[relay] a console left (%d in the relay)", (int)g_hubClients.size()); } else ++it; }
+    fd_set rs; FD_ZERO(&rs); FD_SET(g_hub, &rs); timeval tv{1, 0}; if (select((int)g_hub + 1, &rs, nullptr, nullptr, &tv) <= 0) continue;
+    sockaddr_in from; socklen_t fl = sizeof from; int n = (int)recvfrom(g_hub, (char*)buf, sizeof buf, 0, (sockaddr*)&from, &fl);
+    if (n > 0) HubHandle(buf, n, from);
+  }
+}
+bool HubStart(int port) {
+  g_hub = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP); if (g_hub == INVALID_SOCKET) return false;
+  int one = 1; setsockopt(g_hub, SOL_SOCKET, SO_REUSEADDR, (const char*)&one, sizeof one);
+  sockaddr_in a = {}; a.sin_family = AF_INET; a.sin_addr.s_addr = htonl(INADDR_ANY); a.sin_port = htons((uint16_t)port);
+  if (bind(g_hub, (sockaddr*)&a, sizeof a) != 0) { Log("[relay] cannot listen on UDP port %d", port); closesocket(g_hub); g_hub = INVALID_SOCKET; return false; }
+  g_hubPort = port; plat::ThreadSpawn(HubThread, nullptr);
+  Log("[relay] hosting a System Link relay on UDP port %d", port); return true;
+}
+
 void RelayStart() {
-  const char* r = getenv("XBOX_RELAY"); if (!r || !*r) return;
+  const char* r = getenv("XBOX_RELAY");
+  static char self[40];
+  if (const char* hp = getenv("XBOX_RELAY_HOST")) { int port = atoi(hp); if (port <= 0 || port > 65535) port = 3075; NetSockInit(); if (HubStart(port) && (!r || !*r)) { snprintf(self, sizeof self, "127.0.0.1:%d", port); r = self; } }
+  if (!r || !*r) return;
   char host[200]; int port = 3075; if (sscanf(r, "%199[^:]:%d", host, &port) < 1) return;
   addrinfo hints = {}, *res = nullptr; hints.ai_family = AF_INET; hints.ai_socktype = SOCK_DGRAM; char ps[16]; sprintf(ps, "%d", port);
   if (getaddrinfo(host, ps, &hints, &res) != 0 || !res) { Log("[net] relay %s: cannot resolve", r); return; }

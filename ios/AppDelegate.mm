@@ -75,6 +75,7 @@ extern "C" int ReforgedFpsTenths();
   NSFileManager* fm = [NSFileManager defaultManager];
   self.docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
   [fm changeCurrentDirectoryPath:self.docs];
+  [RFSettings loadBundleDefaults:[[NSBundle mainBundle] bundlePath]];   // a relay built into this app by the companion (--relay), if any
   [self applyEnvironment];
 
   NSString* bundle = [[NSBundle mainBundle] bundlePath];

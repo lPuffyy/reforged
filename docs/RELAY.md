@@ -40,6 +40,24 @@ Options: `--max-room` (consoles per room, default 16), `--max-rooms` (default 25
 
 Check it works: the relay prints `join` when a console connects and `drop` when one goes quiet for 30 seconds.
 
+## Hosting from a device (no separate server)
+The runtime contains the same relay. In the iOS app's Settings, turn on **Host a relay on this device**: the others use this device's address (shown in the
+settings, with port 3075) and the same room name, and you play on this device as well. Everyone must be able to reach the host: the same Wi-Fi works, and so does a
+private network such as Tailscale from anywhere. A phone on mobile data cannot accept connections from the Internet, and the relay stops when the app closes. On a
+computer set `XBOX_RELAY_HOST=<port>` (and optionally `XBOX_RELAY_ROOM`).
+
+## Using your own domain
+A relay needs an address that does not change. If you have a domain:
+1. Make a name such as `relay.yourdomain.com` with an **A record** pointing at the machine's public address (a rented server's address, or your home address).
+2. At home, keep the record current with your DNS provider's dynamic-DNS feature or a small updater (for example `ddclient`). If the provider offers a "proxy", turn it
+   **off** for this record (DNS only): proxies for web traffic do not carry UDP.
+3. Players enter `relay.yourdomain.com:3075`. Pointing a name at your home address makes that address easy to find; a small rented server avoids that.
+
+## A default relay in the app
+The companion can build a relay address into a personal app so players only have to pick a room: `reforged-companion --relay relay.yourdomain.com:3075 --relay-room
+<name>`. The app uses it until the player changes or turns it off in Settings. Only apps built with that option use it, so nobody is pointed at your server by accident.
+The released app has no default relay.
+
 ## Safety, privacy and limits
 - **Nothing is encrypted.** The relay (and everyone in your room) can see the game's network traffic, which can include player names. Do not use it for anything private.
 - **There are no accounts.** Anyone who knows the room name can join it. Pick a private name and share it only with people you trust.

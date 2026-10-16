@@ -135,6 +135,7 @@
 // Sections: 0 on-screen controls, 1 display, 2 diagnostics, 3 about
 @implementation SettingsViewController
 
+- (void)hostChanged:(UISwitch*)sw { [RFSettings setRelayHosting:sw.on]; [self.delegate settingsChanged]; [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:2] withRowAnimation:UITableViewRowAnimationNone]; }
 - (void)relayChanged:(UISwitch*)sw { [RFSettings setRelayEnabled:sw.on]; [self.delegate settingsChanged]; }
 - (BOOL)textFieldShouldReturn:(UITextField*)tf { [tf resignFirstResponder]; return YES; }
 - (void)textFieldDidEndEditing:(UITextField*)tf {
@@ -143,11 +144,12 @@
 }
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView*)tv { return 5; }
-- (NSInteger)tableView:(UITableView*)tv numberOfRowsInSection:(NSInteger)s { return s == 0 ? 3 : (s == 1 ? 4 : (s == 2 ? 3 : (s == 3 ? 1 : 2))); }
+- (NSInteger)tableView:(UITableView*)tv numberOfRowsInSection:(NSInteger)s { return s == 0 ? 3 : (s == 1 ? 4 : (s == 2 ? 4 : (s == 3 ? 1 : 2))); }
 - (NSString*)tableView:(UITableView*)tv titleForHeaderInSection:(NSInteger)s { return @[@"On-screen controls", @"Display", @"System Link over the Internet", @"Diagnostics", @"About"][s]; }
 - (NSString*)tableView:(UITableView*)tv titleForFooterInSection:(NSInteger)s {
   if (s == 0) return @"Automatic hides the on-screen controls while a physical controller is connected and shows them again when it is gone.";
   if (s == 1) return @"Render resolution draws the game at a multiple of its original size and scales it down, which smooths jagged edges (it works like supersampling antialiasing) but uses more battery and can lower the frame rate; changes apply the next time a game starts. The frame counter appears in the top left corner while a game runs.";
+  if (s == 2 && [RFSettings relayHosting]) return [NSString stringWithFormat:@"This device is the relay while a game runs: the others enter one of these addresses as the server (the same Wi-Fi, or Tailscale if you use it) and the same room name, and you play on this device as well. Keep the app open on the game; if it closes, the relay stops.\n\n%@", [RFSettings addressesToShare]];
   if (s == 2) return @"Connects to a relay server so System Link games work over the Internet. Everyone who plays together enters the same server address and the same room name, then uses the game's own System Link menu. Nothing is encrypted: use a private room name and play with people you trust. Applies the next time a game starts.";
   if (s == 3) return @"Saves a few frame images and a detailed log now and then (and whenever the picture suddenly goes black). Turn it on when you are asked to report a problem; the files appear in this app's folder.";
   return nil;
@@ -168,7 +170,11 @@
     c.textLabel.text = names[ip.row - 1];
     c.accessoryType = [RFSettings renderScale] == ip.row ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
   } else if (ip.section == 2) {
-    if (ip.row == 0) {
+    if (ip.row == 3) {
+      c.textLabel.text = @"Host a relay on this device";
+      UISwitch* sw = [UISwitch new]; sw.on = [RFSettings relayHosting]; [sw addTarget:self action:@selector(hostChanged:) forControlEvents:UIControlEventValueChanged];
+      c.accessoryView = sw;
+    } else if (ip.row == 0) {
       c.textLabel.text = @"Use a relay server";
       UISwitch* sw = [UISwitch new]; sw.on = [RFSettings relayEnabled]; [sw addTarget:self action:@selector(relayChanged:) forControlEvents:UIControlEventValueChanged];
       c.accessoryView = sw;

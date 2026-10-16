@@ -1,5 +1,8 @@
 #import "GameLibrary.h"
 #import <CommonCrypto/CommonDigest.h>
+#include <ifaddrs.h>
+#include <arpa/inet.h>
+#include <net/if.h>
 
 extern "C" uint8_t* ReforgedDiscReadRootFile(const char* isoPath, const char* fileName, uint32_t* outSize);
 
@@ -150,18 +153,41 @@ static NSData* DiscExecutable(NSString* path) {
 
 @implementation RFSettings
 
+static NSDictionary* gBundleRelay;   // {server, room, enabled} from Games/games.json, or nil
++ (void)loadBundleDefaults:(NSString*)bundle {
+  NSData* data = [NSData dataWithContentsOfFile:[bundle stringByAppendingPathComponent:@"Games/games.json"]]; if (!data) return;
+  NSDictionary* root = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+  NSDictionary* r = [root isKindOfClass:[NSDictionary class]] ? root[@"relay"] : nil;
+  if ([r isKindOfClass:[NSDictionary class]] && [r[@"server"] isKindOfClass:[NSString class]] && [r[@"server"] length]) gBundleRelay = r;
+}
+
 + (NSInteger)touchMode { return [[NSUserDefaults standardUserDefaults] integerForKey:@"touchMode"]; }
 + (void)setTouchMode:(NSInteger)mode { [[NSUserDefaults standardUserDefaults] setInteger:mode forKey:@"touchMode"]; [self applyToEnvironment]; }
 + (NSInteger)renderScale { NSInteger v = [[NSUserDefaults standardUserDefaults] integerForKey:@"renderScale"]; return v < 1 ? 1 : (v > 3 ? 3 : v); }
 + (void)setRenderScale:(NSInteger)scale { [[NSUserDefaults standardUserDefaults] setInteger:scale forKey:@"renderScale"]; [self applyToEnvironment]; }
 + (BOOL)showFps { return [[NSUserDefaults standardUserDefaults] boolForKey:@"showFps"]; }
 + (void)setShowFps:(BOOL)on { [[NSUserDefaults standardUserDefaults] setBool:on forKey:@"showFps"]; }
-+ (BOOL)relayEnabled { return [[NSUserDefaults standardUserDefaults] boolForKey:@"relayEnabled"]; }
++ (BOOL)relayEnabled { NSUserDefaults* ud = [NSUserDefaults standardUserDefaults]; if ([ud objectForKey:@"relayEnabled"]) return [ud boolForKey:@"relayEnabled"]; return gBundleRelay ? [gBundleRelay[@"enabled"] boolValue] : NO; }
 + (void)setRelayEnabled:(BOOL)on { [[NSUserDefaults standardUserDefaults] setBool:on forKey:@"relayEnabled"]; [self applyToEnvironment]; }
-+ (NSString*)relayServer { return [[NSUserDefaults standardUserDefaults] stringForKey:@"relayServer"] ?: @""; }
++ (NSString*)relayServer { NSString* v = [[NSUserDefaults standardUserDefaults] stringForKey:@"relayServer"]; return v.length ? v : (gBundleRelay[@"server"] ?: @""); }
 + (void)setRelayServer:(NSString*)server { [[NSUserDefaults standardUserDefaults] setObject:[server stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] forKey:@"relayServer"]; [self applyToEnvironment]; }
-+ (NSString*)relayRoom { return [[NSUserDefaults standardUserDefaults] stringForKey:@"relayRoom"] ?: @""; }
++ (NSString*)relayRoom { NSString* v = [[NSUserDefaults standardUserDefaults] stringForKey:@"relayRoom"]; return v.length ? v : ([gBundleRelay[@"room"] isKindOfClass:[NSString class]] ? gBundleRelay[@"room"] : @""); }
 + (void)setRelayRoom:(NSString*)room { [[NSUserDefaults standardUserDefaults] setObject:[room stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] forKey:@"relayRoom"]; [self applyToEnvironment]; }
++ (BOOL)relayHosting { return [[NSUserDefaults standardUserDefaults] boolForKey:@"relayHosting"]; }
++ (void)setRelayHosting:(BOOL)on { [[NSUserDefaults standardUserDefaults] setBool:on forKey:@"relayHosting"]; [self applyToEnvironment]; }
++ (NSString*)addressesToShare {
+  NSMutableArray* lines = [NSMutableArray array]; struct ifaddrs* list = NULL;
+  if (getifaddrs(&list) == 0) {
+    for (struct ifaddrs* a = list; a; a = a->ifa_next) {
+      if (!a->ifa_addr || a->ifa_addr->sa_family != AF_INET || !(a->ifa_flags & IFF_UP) || (a->ifa_flags & IFF_LOOPBACK)) continue;
+      char ip[INET_ADDRSTRLEN]; inet_ntop(AF_INET, &((struct sockaddr_in*)a->ifa_addr)->sin_addr, ip, sizeof ip);
+      NSString* name = [NSString stringWithUTF8String:a->ifa_name]; NSString* kind = [name hasPrefix:@"en"] ? @"Wi-Fi" : ([name hasPrefix:@"utun"] && !strncmp(ip, "100.", 4) ? @"Tailscale" : nil);
+      if (kind) [lines addObject:[NSString stringWithFormat:@"%@: %s:3075", kind, ip]];
+    }
+    freeifaddrs(list);
+  }
+  return lines.count ? [lines componentsJoinedByString:@"\n"] : @"no network address found (connect to Wi-Fi)";
+}
 + (BOOL)diagnostics { return [[NSUserDefaults standardUserDefaults] boolForKey:@"diagnostics"]; }
 + (void)setDiagnostics:(BOOL)on { [[NSUserDefaults standardUserDefaults] setBool:on forKey:@"diagnostics"]; [self applyToEnvironment]; }
 
@@ -169,6 +195,7 @@ static NSData* DiscExecutable(NSString* path) {
   NSInteger t = [self touchMode];
   if (t == 1) setenv("REFORGED_TOUCH", "on", 1); else if (t == 2) setenv("REFORGED_TOUCH", "off", 1); else unsetenv("REFORGED_TOUCH");
   if ([self renderScale] > 1) setenv("XBOX_RES_SCALE", [[NSString stringWithFormat:@"%ld", (long)[self renderScale]] UTF8String], 1); else unsetenv("XBOX_RES_SCALE");
+  if ([self relayHosting]) setenv("XBOX_RELAY_HOST", "3075", 1); else unsetenv("XBOX_RELAY_HOST");
   if ([self relayEnabled] && [self relayServer].length) {
     setenv("XBOX_RELAY", [[self relayServer] UTF8String], 1);
     if ([self relayRoom].length) setenv("XBOX_RELAY_ROOM", [[self relayRoom] UTF8String], 1); else unsetenv("XBOX_RELAY_ROOM");

@@ -196,9 +196,14 @@ def main():
     ap.add_argument('--pubkey', default=RELEASE_PUBLIC_KEY, help='release signing public key (hex)')
     ap.add_argument('--work', default='', help='working directory (default: a temporary one)')
     ap.add_argument('--add-to', default='', help='an existing personal app: add this game to it (the games already in it stay) instead of starting from the downloaded app')
+    ap.add_argument('--relay', default='', help='host[:port] of a System Link relay to build in as this app\'s default (players can change or turn it off in the app); it is not a default for anyone else')
+    ap.add_argument('--relay-room', default='', help='the default room name for --relay')
     ap.add_argument('--keep', action='store_true')
     a = ap.parse_args()
     steps = 7
+    if a.relay:
+        import re
+        if not re.fullmatch(r'[A-Za-z0-9._-]+(:[0-9]{1,5})?', a.relay): die('--relay must look like host or host:port')
 
     iso = find_iso(a.iso)
     say(1, steps, 'reading %s' % os.path.basename(iso))
@@ -277,6 +282,9 @@ def main():
     old = next((g for g in manifest['games'] if g.get('id') == gid), None)
     if old and old.get('legacyState'): entry['legacyState'] = True   # keep the link to files an older single-game app left behind
     manifest['games'] = [g for g in manifest['games'] if g.get('id') != gid] + [entry]
+    if a.relay:
+        manifest['relay'] = {'server': a.relay, 'room': a.relay_room, 'enabled': True}
+        print('  default relay: %s%s' % (a.relay, (' (room "%s")' % a.relay_room) if a.relay_room else ''))
     files['Games/games.json'] = json.dumps(manifest, indent=1).encode('utf-8')
     print('  the app now holds %d game(s): %s' % (len(manifest['games']), ', '.join(g.get('name', '?') for g in manifest['games'])))
     if a.out: out_path = a.out

@@ -43,12 +43,16 @@
 + (void)setRenderScale:(NSInteger)scale;
 + (BOOL)showFps;                        // an on-screen frame counter while the game runs
 + (void)setShowFps:(BOOL)on;
++ (void)loadBundleDefaults:(NSString*)bundle;   // a relay built into this copy of the app (the companion's --relay): used until the user changes it
 + (BOOL)relayEnabled;                   // System Link over the Internet through a relay server
 + (void)setRelayEnabled:(BOOL)on;
 + (NSString*)relayServer;                // host or host:port (default port 3075)
 + (void)setRelayServer:(NSString*)server;
 + (NSString*)relayRoom;                  // everyone who plays together uses the same room name
 + (void)setRelayRoom:(NSString*)room;
++ (BOOL)relayHosting;                   // this device runs the relay for the others (they use this device's address)
++ (void)setRelayHosting:(BOOL)on;
++ (NSString*)addressesToShare;           // this device's network addresses with the relay port, one per line
 + (BOOL)diagnostics;                     // save occasional frame captures and detailed logs (help when reporting a problem)
 + (void)setDiagnostics:(BOOL)on;
 + (void)applyToEnvironment;
