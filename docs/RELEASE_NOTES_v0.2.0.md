@@ -15,7 +15,7 @@ you add a game to it with `--add-to`). The app keeps its saves as long as you in
   keeps its own saves, settings and caches. `reforged-companion --add-to <your app>` adds another game without rebuilding the first.
 - **Settings screen** (replaces most of the environment variables): on-screen controls (automatic, always, never), a frame-rate counter, render resolution (1x, 2x, 3x:
   higher values smooth jagged edges but use more battery), System Link relay settings, and a Diagnostics switch for bug reports.
-- **Controllers.** The on-screen controls hide while a physical controller is connected and come back when it disconnects.
+- **Controllers.** The on-screen controls hide while a physical controller is connected and come back when it disconnects. Tested with a physical controller on an iPhone.
 - **System Link over the Internet.** The runtime can connect to a relay server (rooms, abuse limits, no encryption: see
   [docs/RELAY.md](https://github.com/lPuffyy/reforged/blob/main/docs/RELAY.md)), or host one on the device. The app comes with the project's relay filled in, off until you turn it on.
   The `--relay` companion option builds a different default into an app. A phone found and joined a System Link game hosted on a computer through the relay and the match started; a long match has not been tested.
@@ -29,7 +29,7 @@ you add a game to it with `--add-to`). The app keeps its saves as long as you in
 - Frame-rate dips while new textures load. Real MSAA and anisotropic filtering are not implemented; render resolution is the antialiasing.
 - Leaving the app pauses the game, and a System Link match drops about 30 seconds later.
 - Other titles are untested and will probably need work (missing kernel functions, graphics features, audio hooks, translator gaps). See the compatibility list.
-- Hardware controller support is written but has not been tried with a real controller. Official online services are not supported. Free Apple IDs expire sideloaded apps after 7 days.
+- Only one controller has been tried so far; others that iOS supports should work but are untested. Official online services are not supported. Free Apple IDs expire sideloaded apps after 7 days.
 
 ## What this is not
 It contains no game code, console firmware, keys or assets, and is not affiliated with or endorsed by any console maker or game publisher. You must supply a disc you own.
