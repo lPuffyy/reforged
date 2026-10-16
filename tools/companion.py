@@ -39,6 +39,7 @@ def apply_known_patches(xbe, title):
     try: table = json.load(open(os.path.join(HERE, 'title_patches.json'), encoding='utf-8'))
     except (OSError, ValueError): table = {}
     entry = table.get(digest)
+    print('  executable hash (SHA-256): %s' % digest)   # compatibility reports are keyed by this value
     if not entry:
         print('  note: this build is not one the project has tested (executable hash %s...); it is translated without patches and may not run' % digest[:12]); return
     with open(os.path.join(title, 'patches.txt'), 'w') as f:
