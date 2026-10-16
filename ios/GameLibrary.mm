@@ -205,8 +205,9 @@ static NSDictionary* gBundleRelay;   // {server, room, enabled} from Games/games
   if ([self diagnostics]) {
     // every 2400 frames, and whenever the picture suddenly goes black: log two frames draw by draw and save their images
     setenv("XBOX_DRAWLOG", "every=2400", 1); setenv("XBOX_FRAMEDUMP", "sync", 1); setenv("XBOX_DARKWATCH", "1", 1); setenv("XBOX_DRAWTEX", "size:103x19", 1);
+    setenv("XBOX_CRYPTO_SELFTEST", "1", 1); setenv("XBOX_NET_LOG", "1", 1); setenv("XBOX_NET_PCAP", "net.pcap", 1);   // network and crypto checks for System Link problems
   } else {
-    unsetenv("XBOX_DRAWLOG"); unsetenv("XBOX_FRAMEDUMP"); unsetenv("XBOX_DARKWATCH"); unsetenv("XBOX_DRAWTEX");
+    unsetenv("XBOX_DRAWLOG"); unsetenv("XBOX_FRAMEDUMP"); unsetenv("XBOX_DARKWATCH"); unsetenv("XBOX_DRAWTEX"); unsetenv("XBOX_CRYPTO_SELFTEST"); unsetenv("XBOX_NET_LOG"); unsetenv("XBOX_NET_PCAP");
   }
 }
 

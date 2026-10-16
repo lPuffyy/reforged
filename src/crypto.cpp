@@ -3,7 +3,9 @@
 #include <cstring>
 #include <cstdio>
 #include <cstdlib>
+#include <string>
 #include <vector>
+#include <algorithm>
 
 #define KFN(name, ...) extern "C" uint32_t PLAT_STDCALL K_##name(__VA_ARGS__)
 
@@ -106,4 +108,23 @@ KFN(XcModExp, uint32_t* result, const uint32_t* base, const uint32_t* exp, const
   if (GeqBig(r, m)) SubBig(r, m);              // 1 mod m (m == 1 gives 0)
   for (int i = top; i >= 0; i--) { r = MulModBig(r, r, m); if ((exp[i >> 5] >> (i & 31)) & 1) r = MulModBig(r, b, m); }
   memcpy(result, r.data(), n * 4); return 1;
+}
+
+// XBOX_CRYPTO_SELFTEST=1: checks the crypto exports against published known answers and logs the result (a quick way to see whether they behave the same on a new CPU).
+extern "C" uint32_t PLAT_STDCALL K_XcKeyTable(uint32_t cipher, uint8_t* table, const uint8_t* key);
+extern "C" uint32_t PLAT_STDCALL K_XcBlockCrypt(uint32_t cipher, uint8_t* out, const uint8_t* in, const uint8_t* table, uint32_t op);
+static std::string Hex(const uint8_t* p, size_t n) { std::string s; char b[3]; for (size_t i = 0; i < n; i++) { snprintf(b, sizeof b, "%02x", p[i]); s += b; } return s; }
+void CryptoSelfTest() {
+  auto report = [](const char* name, const std::string& got, const char* want) { Log("[selftest] %s: %s%s", name, got == want ? "ok" : "WRONG, got ", got == want ? "" : got.c_str()); };
+  uint8_t ctx[128] = {0}, out[32] = {0};
+  K_XcSHAInit(ctx); K_XcSHAUpdate(ctx, (const uint8_t*)"abc", 3); K_XcSHAFinal(ctx, out); report("SHA-1 (abc)", Hex(out, 20), "a9993e364706816aba3e25717850c26c9cd0d89d");
+  std::string longer(1000, 'a'); K_XcSHAInit(ctx); for (int i = 0; i < 1000; i += 7) K_XcSHAUpdate(ctx, (const uint8_t*)longer.data() + i, (uint32_t)std::min<size_t>(7, 1000 - i)); K_XcSHAFinal(ctx, out);
+  { uint8_t one[20]; K_XcSHAInit(ctx); K_XcSHAUpdate(ctx, (const uint8_t*)longer.data(), 1000); K_XcSHAFinal(ctx, one); report("SHA-1 (1000 bytes, split vs whole)", Hex(out, 20), Hex(one, 20).c_str()); }
+  const char* fox = "The quick brown fox jumps over the lazy dog";
+  K_XcHMAC((const uint8_t*)"key", 3, (const uint8_t*)fox, (uint32_t)strlen(fox), nullptr, 0, out); report("HMAC-SHA1", Hex(out, 20), "de7c9b85b8b78aa6bc8a7a36f70a90701c9db4d9");
+  { uint8_t rc[258]; uint8_t data[9] = {'P', 'l', 'a', 'i', 'n', 't', 'e', 'x', 't'}; K_XcRC4Key(rc, 3, (const uint8_t*)"Key"); K_XcRC4Crypt(rc, 9, data); report("RC4", Hex(data, 9), "bbf316e8d940af0ad3"); }
+  { uint8_t table[64] = {0}; const uint8_t key[8] = {0x13, 0x34, 0x57, 0x79, 0x9B, 0xBC, 0xDF, 0xF1}, in[8] = {0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF}; K_XcKeyTable(0, table, key); K_XcBlockCrypt(0, out, in, table, 1); report("DES", Hex(out, 8), "85e813540f0ab405"); }
+  { uint32_t r[1] = {0}, b[1] = {4}, e[1] = {13}, m[1] = {497}; K_XcModExp(r, b, e, m, 1); Log("[selftest] ModExp 4^13 mod 497: %s", r[0] == 445 ? "ok" : "WRONG"); }
+  { uint32_t a[24], e[24], m[24], r1[24], r2[24]; for (int i = 0; i < 24; i++) { a[i] = 0x9E3779B9u * (i + 1); e[i] = i == 0 ? 65536 : 0; m[i] = 0xFFFFFFFFu - (i == 0 ? 4 : 0); }   // 768-bit numbers as in XNet's key exchange
+    K_XcModExp(r1, a, e, m, 24); uint32_t sq[24], two[24] = {2}, big[24] = {0x8000}; K_XcModExp(sq, a, two, m, 24); K_XcModExp(r2, sq, big, m, 24); Log("[selftest] ModExp 768-bit: a^65536 == (a^2)^32768: %s", memcmp(r1, r2, sizeof r1) == 0 ? "ok" : "WRONG"); }
 }
