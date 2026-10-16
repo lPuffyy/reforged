@@ -52,8 +52,8 @@ struct Control { Kind kind; CGPoint center; CGFloat radius; const char* label; }
   UIEdgeInsets ins = self.safeAreaInsets;                                                      // keep clear of the notch and rounded corners
   CGFloat ml = std::max(26 * u, ins.left + 14), mr = std::max(26 * u, ins.right + 14), mb = std::max(22 * u, ins.bottom + 8), mt = std::max(14 * u, ins.top + 8);
   CGFloat rs = 58 * u, rb = 26 * u, sp = 56 * u;                                              // stick radius, button radius, face button spacing
-  CGPoint L = {ml + rs + 6 * u, h - mb - rs}, R = {w - mr - rs - 6 * u, h - mb - rs}, F = {w - mr - 108 * u, h * 0.40f}, D = {L.x, h * 0.40f};   // D: the direction pad, above the left stick like the face buttons are above the right one
-  CGFloat ds = 50 * u, dr = 23 * u;
+  CGPoint L = {ml + rs + 6 * u, h - mb - rs}, R = {w - mr - rs - 6 * u, h - mb - rs}, F = {w - mr - 108 * u, h * 0.40f}, D = {L.x, h * 0.475f};   // D: the direction pad, above the left stick like the face buttons are above the right one
+  CGFloat ds = 36 * u, dr = 20 * u;   // compact enough to sit between the white button and the left stick
   _controls = {
     {kStickL, L, rs, ""}, {kStickR, R, rs, ""},
     {kY, {F.x, F.y - sp}, rb, "Y"}, {kA, {F.x, F.y + sp}, rb, "A"}, {kX, {F.x - sp, F.y}, rb, "X"}, {kB, {F.x + sp, F.y}, rb, "B"},
