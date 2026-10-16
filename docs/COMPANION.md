@@ -10,7 +10,7 @@ Status: implemented and used on a real device (see PORTING.md for what a first r
 
 ## Decisions
 - **IPA editing**: an IPA is a zip. Extract, add `Payload/<App>.app/Frameworks/<module>.dylib`, zip again.
-- **Module loading**: the app loads the module itself at startup (`dlopen` of a fixed path inside its own bundle). The companion never edits the app binary's load commands. (Runtime side already exists: `XBOX_LIFT_MODULE`; the app will default to the bundle path.)
+- **Module loading**: the app loads the module itself at startup (`dlopen` of a fixed path inside its own bundle). The companion never edits the app binary's load commands. (Runtime side: `XBOX_LIFT_MODULE` for development; the app loads `Frameworks/game-<id>.dylib` from its bundle.)
 - **Signing**: the companion signs nothing. Sideload tools re-sign the app and nested code with the user's Apple ID. To verify on a real device before release: that each tool also re-signs a bare dylib under `Frameworks/` (if one does not, ship the module as a framework bundle instead).
 - **Integrity**: pin the app version the tool expects, and verify the download with a detached signature (ed25519) whose public key is compiled into the tool. A hash in the release notes alone is weaker: whoever can swap the asset can edit the notes.
 - **Toolchain**: clang + lld are fetched on first run from the official LLVM releases (pinned version, hash-checked) rather than bundled. Cached after the first run.
@@ -22,15 +22,15 @@ Status: implemented and used on a real device (see PORTING.md for what a first r
 
 ## Engineering notes and risks (found while checking this against the code)
 - **Build time and size.** The real translated program is large (tens of thousands of functions). Expect a long cross-compile (tens of minutes on a laptop) and a module in the 100 MB range; the progress display and `-Oz`/`-O1` choices matter. Translation itself takes minutes.
-- **Cross-compiling without Apple's SDK.** The translated code needs about ten libm functions and `memset`. The module build must use the project's own minimal headers (`-nostdlibinc`), `--target=arm64-apple-ios`, and lld, with undefined symbols resolved when the app loads it. This is not yet proven; it will be tested in CI (Linux runner with the official LLVM release builds the module, a macOS runner inspects the result with Apple's tools).
+- **Cross-compiling without Apple's SDK.** The translated code needs about ten libm functions and `memset`. The module build must use the project's own minimal headers (`-nostdlibinc`), `--target=arm64-apple-ios`, and lld, with undefined symbols resolved when the app loads it. This is proven and tested in CI (Linux runner with the official LLVM release builds the module, a macOS runner inspects the result with Apple's tools).
 - **One-file tool.** The translator and survey are Python (capstone). Per-OS executables come from freezing the tool in CI (three runners). The release asset names and the signature files are part of the release process.
-- **Speed is unproven on phones.** Translated code has only run on desktop CPUs. Performance work may be needed.
+- **Speed on phones.** The test title runs on an A17 Pro (see PORTING.md); frame-rate dips while new textures load remain.
 - **Loading time and memory.** A module this size is mapped at launch; check launch time and memory pressure on a real device early.
 - **Reading a 4-5 GB image in place.** The app must use security-scoped access and random reads; never copy the file.
 - **Keep the personal IPA private.** It contains code derived from the user's own disc. Document that sharing it is not allowed.
 
 ## Open questions
-- Release signing key: who holds it, and how it is rotated.
+- Release signing key rotation (the maintainer holds the private key; see RELEASING.md).
 - Whether to also publish a "module only" download for users who already have the app (probably not: it would be game-derived).
 - Minimum iOS version to target.
 
@@ -53,6 +53,9 @@ How it works:
   single-game app is converted to this layout (its saved files are moved into the game's folder the first time the game starts). One app instead of one per game keeps the number of sideloaded apps (limited on free Apple IDs) down.
 - **Costs:** each game adds roughly 130 MB to the installed app, and adding a game means reinstalling the app (saves stay if the app identity is unchanged).
 - **Compatibility:** each new game will need its own testing and patch entries; the table above is per executable hash for that reason.
+- **Moving games into a newer app:** `--ipa <newer app> --add-to <old app>` carries the games of the old app (modules and files) into the newer app without rebuilding
+  them; `--add-to` can be repeated, and a game that is already in one of those apps is reused instead of rebuilt. Use apps of the same release series.
+- **Relay default:** `--relay <host:port>` (and `--relay-room`) builds a default System Link relay into the app's manifest (see RELAY.md).
 
 
 ## Game metadata

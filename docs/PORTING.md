@@ -5,6 +5,9 @@
   MMIO routing (no page-fault trapping), no native fallback in the relocated build.
 - Static translator and survey; the relocated build runs a real title through its menus and gameplay.
 - Kernel/DirectSound/input HLE, NV2A to Vulkan renderer, NIC emulation with a UDP relay for LAN play.
+- **App and network features** (v0.2.0): game library and settings screen, physical controller support (on-screen controls hide automatically), on-screen D-pad,
+  frame-rate counter, render resolution, System Link over the Internet through a relay (rooms, limits, in-app hosting; `tools/relay.py`), pause/resume handling
+  (the swapchain is rebuilt after the app is backgrounded), and survey gap filling so long back-to-back function runs are found.
 
 - **Platform layer** (`src/plat.h`, `plat_win.cpp`, `plat_posix.cpp`): time, threads, waitable objects (events/semaphores/mutexes/threads),
   virtual memory, shared memory aliases, files and directories, dynamic libraries, audio output, process spawning, crash handler. The
@@ -38,13 +41,16 @@
    final frame and the intermediate render targets on the device and compare them with the same frame on Windows; switches in a `reforged.env`
    file for suspects (shader precision, blend factors, render-to-texture sampling, vertex colour order, swapchain colour space).
 2. **Some campaign levels hang on load** (black screen, the game stays responsive to input).
-3. **Disc picker**: the Files picker still shows the disc image as not selectable; placing it in the app's Documents folder as `game.iso` works.
+3. **Disc picker**: fixed in the app by recognising disc images by their contents (any `.iso`/`.xiso` name), with open-in-place and copy modes; the cause on some
+   devices depends on where the image is stored (report details if it still fails).
 4. **Shader compile stalls** in the first seconds (pipeline cache), then performance work.
 5. **Per-title data** (hooks, patch lists, vtable addresses) moved out of code into generated per-title files; the companion's `--title-data`
    option is the first step. The title-specific constants below are still in code.
 
 ## Next
-- First signed release, after the checks above.
+- More titles: missing kernel functions, unimplemented texture formats and shader modes, audio hook discovery and translator gaps are expected (see the compatibility list).
+- Real MSAA and anisotropic filtering (needs mipmaps); texture and shader stutter.
+- Online game metadata (opt-in), and keeping saves when the app itself is updated.
 
 ## Known title-specific constants still in code (to move into per-title data)
 - `src/audio_hle.cpp`, `src/dsound_hle.cpp`: address of the stream vtable in the executable.

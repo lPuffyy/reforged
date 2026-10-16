@@ -1,5 +1,5 @@
 name: release
-# Publishes the generic app: push a tag like v0.1.0. The IPA is built unsigned (the user's sideloading tool signs it), then signed with the project's release
+# Publishes the generic app: push a tag like v0.2.0. The IPA is built unsigned (the user's sideloading tool signs it), then signed with the project's release
 # key (Ed25519; secret RELEASE_SIGNING_KEY, a PEM private key) so the companion tool can check what it downloads. See docs/RELEASING.md.
 on:
   push:
