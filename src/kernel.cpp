@@ -732,11 +732,11 @@ void KernelInit() {
   uint16_t* ver = (uint16_t*)KernelVariable(324); ver[0] = 1; ver[1] = 0; ver[2] = 5838; ver[3] = 1;  // XboxKrnlVersion 1.0.5838.1
   uint32_t* hw = (uint32_t*)KernelVariable(322); hw[0] = 0; hw[1] = 0xD2;                            // XboxHardwareInfo: flags, GpuRevision(NV2A rev), McpRevision
   *(uint32_t*)KernelVariable(40) = 3;  // HalDiskCachePartitionCount: X:, Y:, Z:
-  { void EepromInit(); const uint8_t* EepromImage(); const uint8_t* EepromHddKey(); EepromInit(); const uint8_t* ee = EepromImage();   // console identity: XboxHDKey from the EEPROM, the LAN / signature keys derived from it (not secrets of a real console: we generated the EEPROM)
+  { void EepromInit(); const uint8_t* EepromImage(); const uint8_t* EepromHddKey(); EepromInit(); const uint8_t* ee = EepromImage();   // console identity: XboxHDKey and the signature key from the EEPROM (not secrets of a real console: we generated the EEPROM). XboxLANKey (variable 353) stays all zero on every console: the games derive their System Link keys from it, so consoles can only talk to each other if it is the same everywhere
     // Saves (title profiles) are signed with these keys: a title dir containing legacy_keys.txt keeps the old all-zero keys so existing saves stay valid.
     bool legacy = false; { const char* td = getenv("XBOX_TITLE_DIR"); char lf[300]; snprintf(lf, sizeof lf, "%s/legacy_keys.txt", td ? td : "work/title"); if (FILE* lk = fopen(lf, "r")) { fclose(lk); legacy = true; Log("[eeprom] legacy (all-zero) keys for this title"); } }
     if (legacy) { /* KernelVariable memory is zero-initialised */ } else {
-    memcpy(KernelVariable(323), EepromHddKey(), 16); for (int i = 0; i < 16; i++) { ((uint8_t*)KernelVariable(353))[i] = EepromHddKey()[i] ^ ee[0x48 + i] ^ 0x4C; ((uint8_t*)KernelVariable(325))[i] = ee[0x48 + i] ^ 0x53; } } }
+    memcpy(KernelVariable(323), EepromHddKey(), 16); for (int i = 0; i < 16; i++) { ((uint8_t*)KernelVariable(325))[i] = ee[0x48 + i] ^ 0x53; } } }
   static char model[] = "ST380011A", serial[] = "5JV0HDFA";
   uint32_t* ms = (uint32_t*)KernelVariable(41); ms[0] = (sizeof model - 1) | ((sizeof model) << 16); { uint32_t a = GuestAlloc(16); memcpy(G(a), model, sizeof model); ms[1] = a; }   // HalDiskModelNumber (ANSI_STRING)
   uint32_t* ss = (uint32_t*)KernelVariable(42); ss[0] = (sizeof serial - 1) | ((sizeof serial) << 16); { uint32_t a = GuestAlloc(16); memcpy(G(a), serial, sizeof serial); ss[1] = a; } // HalDiskSerialNumber
