@@ -15,6 +15,7 @@ you add a game to it with `--add-to`). The app keeps its saves as long as you in
   keeps its own saves, settings and caches. `reforged-companion --add-to <your app>` adds another game without rebuilding the first.
 - **Settings screen** (replaces most of the environment variables): on-screen controls (automatic, always, never), a frame-rate counter, render resolution (1x, 2x, 3x:
   higher values smooth jagged edges but use more battery), System Link relay settings, and a Diagnostics switch for bug reports.
+- **Direction pad** added to the on-screen controls.
 - **Controllers.** The on-screen controls hide while a physical controller is connected and come back when it disconnects. Tested with a physical controller on an iPhone.
 - **System Link over the Internet.** The runtime can connect to a relay server (rooms, abuse limits, no encryption: see
   [docs/RELAY.md](https://github.com/lPuffyy/reforged/blob/main/docs/RELAY.md)), or host one on the device. The app comes with the project's relay filled in, off until you turn it on.

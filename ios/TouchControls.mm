@@ -8,7 +8,7 @@
 #include <map>
 
 namespace {
-enum Kind { kStickL, kStickR, kA, kB, kX, kY, kLT, kRT, kStart, kBack, kBlack, kWhite, kLThumb, kRThumb };
+enum Kind { kStickL, kStickR, kA, kB, kX, kY, kLT, kRT, kStart, kBack, kBlack, kWhite, kLThumb, kRThumb, kDUp, kDDown, kDLeft, kDRight };
 struct Control { Kind kind; CGPoint center; CGFloat radius; const char* label; };
 }
 
@@ -52,7 +52,8 @@ struct Control { Kind kind; CGPoint center; CGFloat radius; const char* label; }
   UIEdgeInsets ins = self.safeAreaInsets;                                                      // keep clear of the notch and rounded corners
   CGFloat ml = std::max(26 * u, ins.left + 14), mr = std::max(26 * u, ins.right + 14), mb = std::max(22 * u, ins.bottom + 8), mt = std::max(14 * u, ins.top + 8);
   CGFloat rs = 58 * u, rb = 26 * u, sp = 56 * u;                                              // stick radius, button radius, face button spacing
-  CGPoint L = {ml + rs + 6 * u, h - mb - rs}, R = {w - mr - rs - 6 * u, h - mb - rs}, F = {w - mr - 108 * u, h * 0.40f};
+  CGPoint L = {ml + rs + 6 * u, h - mb - rs}, R = {w - mr - rs - 6 * u, h - mb - rs}, F = {w - mr - 108 * u, h * 0.40f}, D = {L.x, h * 0.40f};   // D: the direction pad, above the left stick like the face buttons are above the right one
+  CGFloat ds = 50 * u, dr = 23 * u;
   _controls = {
     {kStickL, L, rs, ""}, {kStickR, R, rs, ""},
     {kY, {F.x, F.y - sp}, rb, "Y"}, {kA, {F.x, F.y + sp}, rb, "A"}, {kX, {F.x - sp, F.y}, rb, "X"}, {kB, {F.x + sp, F.y}, rb, "B"},
@@ -60,6 +61,7 @@ struct Control { Kind kind; CGPoint center; CGFloat radius; const char* label; }
     {kWhite, {ml + 34 * u, 100 * u}, 22 * u, "WHT"}, {kBlack, {w - mr - 34 * u, 100 * u}, 22 * u, "BLK"},
     {kLThumb, {L.x + rs + 28 * u, L.y - 20 * u}, 22 * u, "L3"}, {kRThumb, {R.x - rs - 28 * u, R.y - 20 * u}, 26 * u, "R3"},
     {kBack, {w / 2 - 52 * u, h - mb - 14 * u}, 20 * u, "BACK"}, {kStart, {w / 2 + 52 * u, h - mb - 14 * u}, 20 * u, "START"},
+    {kDUp, {D.x, D.y - ds}, dr, "\xE2\x96\xB2"}, {kDDown, {D.x, D.y + ds}, dr, "\xE2\x96\xBC"}, {kDLeft, {D.x - ds, D.y}, dr, "\xE2\x97\x80"}, {kDRight, {D.x + ds, D.y}, dr, "\xE2\x96\xB6"},   // triangles: up, down, left, right
   };
   for (CAShapeLayer* l in _layers) [l removeFromSuperlayer];
   for (CALayer* l in _extras) [l removeFromSuperlayer];
@@ -80,7 +82,7 @@ struct Control { Kind kind; CGPoint center; CGFloat radius; const char* label; }
       k.position = c.center; k.fillColor = [UIColor colorWithWhite:1.0 alpha:0.22].CGColor; k.strokeColor = [UIColor colorWithWhite:1.0 alpha:0.45].CGColor; k.lineWidth = 1.5;
       [self.layer addSublayer:k]; [_extras addObject:k]; _knobs[i] = k;
     } else if (c.label[0]) {
-      CATextLayer* t = [CATextLayer layer]; CGFloat fs = (strlen(c.label) > 2 ? 11.0 : 16.0) * u * (c.radius > 24 * u ? 1.0 : 0.9);
+      CATextLayer* t = [CATextLayer layer]; CGFloat fs = (strlen(c.label) > 2 && (uint8_t)c.label[0] < 0x80 ? 11.0 : 16.0) * u * (c.radius > 24 * u ? 1.0 : 0.9);
       t.string = [NSString stringWithUTF8String:c.label]; t.fontSize = fs; t.font = (__bridge CFTypeRef)@"Helvetica-Bold"; t.alignmentMode = kCAAlignmentCenter;
       t.foregroundColor = [UIColor colorWithWhite:1.0 alpha:0.62].CGColor; t.contentsScale = scale;
       t.frame = CGRectMake(c.center.x - c.radius, c.center.y - fs * 0.62, 2 * c.radius, fs * 1.3);
@@ -129,6 +131,7 @@ struct Control { Kind kind; CGPoint center; CGFloat radius; const char* label; }
       case kStart: p.buttons |= PAD_START; break; case kBack: p.buttons |= PAD_BACK; break;
       case kBlack: p.analog[PADA_BLACK] = 255; break; case kWhite: p.analog[PADA_WHITE] = 255; break;
       case kLThumb: p.buttons |= PAD_LTHUMB; break; case kRThumb: p.buttons |= PAD_RTHUMB; break;
+      case kDUp: p.buttons |= PAD_UP; break; case kDDown: p.buttons |= PAD_DOWN; break; case kDLeft: p.buttons |= PAD_LEFT; break; case kDRight: p.buttons |= PAD_RIGHT; break;
       default: break;
     }
   }

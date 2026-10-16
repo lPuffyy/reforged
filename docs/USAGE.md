@@ -65,7 +65,7 @@ older companion is converted automatically the first time you add a game to it (
 
 ## Controls
 Touch controls fill the screen, laid out like a controller:
-- Left stick (bottom left) and right stick (bottom right) with **L3** / **R3** buttons beside them.
+- Left stick (bottom left) and right stick (bottom right) with **L3** / **R3** buttons beside them, and a **direction pad** (four arrow buttons) above the left stick.
 - **A B X Y** on the right, **LT** and **RT** (triggers) at the top corners, **WHT** and **BLK** (the two shoulder-style buttons), **BACK** and **START** at the bottom centre.
 - Short taps press buttons; the sticks work by dragging.
 
