@@ -82,7 +82,7 @@ if(IOS)
 
   # Objective-C++ with automatic reference counting (the app and the Apple backends hold Objective-C objects in C++ code)
   target_compile_options(reforged_core PRIVATE $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
-  add_executable(ReforgedApp MACOSX_BUNDLE ios/main.mm ios/AppDelegate.mm ios/TouchControls.mm)
+  add_executable(ReforgedApp MACOSX_BUNDLE ios/main.mm ios/AppDelegate.mm ios/TouchControls.mm ios/GameLibrary.mm ios/LibraryViewController.mm)
   target_compile_options(ReforgedApp PRIVATE -fobjc-arc)
   # app icon: loose PNGs at the bundle root, named in Info.plist (CFBundleIcons)
   file(GLOB REFORGED_ICONS ${CMAKE_SOURCE_DIR}/ios/icons/AppIcon60x60*.png ${CMAKE_SOURCE_DIR}/ios/icons/AppIcon76x76*.png ${CMAKE_SOURCE_DIR}/ios/icons/AppIcon83.5x83.5*.png)

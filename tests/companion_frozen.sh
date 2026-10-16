@@ -30,7 +30,7 @@ if [ "${COMPANION_FULL:-}" = "1" ]; then
   python -I -c "
 import zipfile
 z = zipfile.ZipFile('personal.ipa'); n = z.namelist()
-assert 'Payload/Reforged.app/Frameworks/reforged_game.dylib' in n and 'Payload/Reforged.app/title/default.xbe' in n, n
+assert 'Payload/Reforged.app/Games/games.json' in n and any(x.startswith('Payload/Reforged.app/Frameworks/game-') and x.endswith('.dylib') for x in n) and any(x.endswith('/title/default.xbe') for x in n), n
 print('frozen companion produced a complete personal app')"
 fi
 echo "frozen companion checks passed"

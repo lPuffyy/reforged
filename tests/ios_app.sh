@@ -58,13 +58,16 @@ rm -rf simmod && mkdir -p simmod/work/lift
   python3 -I "$root/tools/build_module.py" --gen work/lift/gen --out reforged_game.dylib --target arm64-apple-ios15.0-simulator     --clang clang++ --ld system --sse2neon "$SSE2NEON_DIR"
   codesign -s - --force reforged_game.dylib )
 xcrun simctl terminate "$udid" dev.reforged.app || true
-mkdir -p "$simapp/Frameworks" "$simapp/title"
-cp simmod/reforged_game.dylib "$simapp/Frameworks/reforged_game.dylib"
-cp simmod/lift_test.xbe "$simapp/title/default.xbe"
-echo "test program: no disc needed" > "$simapp/title/no-disc.txt"
+# the game library layout the companion writes: Games/games.json, Games/<id16>/title/, Frameworks/game-<id16>.dylib
+gid="$(shasum -a 256 simmod/lift_test.xbe | cut -d" " -f1)"; g16="${gid:0:16}"
+mkdir -p "$simapp/Frameworks" "$simapp/Games/$g16/title"
+cp simmod/reforged_game.dylib "$simapp/Frameworks/game-$g16.dylib"
+cp simmod/lift_test.xbe "$simapp/Games/$g16/title/default.xbe"
+echo "test program: no disc needed" > "$simapp/Games/$g16/title/no-disc.txt"
+printf '{"version":1,"games":[{"id":"%s","name":"Test program","module":"Frameworks/game-%s.dylib","title":"Games/%s/title","noDisc":true,"legacyState":false}]}' "$gid" "$g16" "$g16" > "$simapp/Games/games.json"
 codesign --force --deep -s - "$simapp"
 xcrun simctl install "$udid" "$simapp"
-xcrun simctl launch "$udid" dev.reforged.app
+SIMCTL_CHILD_REFORGED_AUTOSTART=1 xcrun simctl launch "$udid" dev.reforged.app
 sleep 20
 data="$(xcrun simctl get_app_container "$udid" dev.reforged.app data)"
 log="$data/Documents/reforged.log"

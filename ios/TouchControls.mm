@@ -1,4 +1,5 @@
 #import "TouchControls.h"
+#import <GameController/GameController.h>
 #include "input.h"
 #include <algorithm>
 #include <cmath>
@@ -27,8 +28,22 @@ struct Control { Kind kind; CGPoint center; CGFloat radius; const char* label; }
     self.backgroundColor = [UIColor clearColor];
     _layers = [NSMutableArray array]; _extras = [NSMutableArray array];
     memset(&_pad, 0, sizeof _pad);
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(controllersChanged) name:GCControllerDidConnectNotification object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(controllersChanged) name:GCControllerDidDisconnectNotification object:nil];
+    [self controllersChanged];
   }
   return self;
+}
+
+// The on-screen controls hide while a physical controller is connected and come back when it is gone. REFORGED_TOUCH=on keeps them always, =off hides them always.
+- (void)controllersChanged {
+  dispatch_async(dispatch_get_main_queue(), ^{
+    const char* mode = getenv("REFORGED_TOUCH"); bool force = mode && !strcmp(mode, "on"), never = mode && !strcmp(mode, "off");
+    bool pad = false; for (GCController* c in [GCController controllers]) if (c.extendedGamepad) { pad = true; break; }
+    bool hide = never || (pad && !force);
+    if (hide && !self.hidden) { self->_touchControl.clear(); self->_touchStart.clear(); memset(&self->_pad, 0, sizeof self->_pad); InputSetHostPad(self->_pad); }   // release anything that was held
+    self.hidden = hide;
+  });
 }
 
 - (void)layoutSubviews {

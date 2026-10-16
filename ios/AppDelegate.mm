@@ -1,20 +1,21 @@
-// The app shell: a window with a Metal-backed view for the game picture, an on-screen controller, a status line, and the runtime on a background thread.
-// The runtime writes its files (log, virtual disk, console identity) under the app's Documents folder, which is also what Finder / iTunes file sharing exposes.
+// The app shell: a window with a Metal-backed view for the game picture, an on-screen controller, and the runtime on a background thread.
+// At launch it shows the game library (ios/LibraryViewController.mm). The runtime writes its files under the app's Documents folder, which is also what
+// Finder / iTunes file sharing and the Files app expose: the log (reforged.log) at the top, and each game's own files in Documents/Games/<id>/.
 //
-// What it runs is decided by what is inside the app bundle (the companion tool adds these to a personal copy of the app):
-//   Frameworks/reforged_game.dylib  the translated game code (the runtime loads it itself)
-//   title/default.xbe               the game's executable (the translated code was made from exactly this file)
-//   Frameworks/MoltenVK.framework   the Vulkan-on-Metal layer used by the renderer (part of the generic app)
-// The disc image is not part of the app: it is Documents/game.iso if present, otherwise the file the user picks in the Files app (opened in place, never
-// copied; the choice is remembered).
+// What can run is decided by what is inside the app bundle (the companion tool adds these to a personal copy of the app, see GameLibrary.h):
+//   Games/games.json, Games/<id>/title/, Frameworks/game-<id>.dylib   one entry per installed game (older single-game apps: title/ and Frameworks/reforged_game.dylib)
+//   Frameworks/MoltenVK.framework                                      the Vulkan-on-Metal layer used by the renderer (part of the generic app)
+// The disc image is not part of the app: the user chooses it in the Files picker (opened in place, or copied into the app) or copies it into the app's folder.
 #import "AppDelegate.h"
 #import "TouchControls.h"
+#import "GameLibrary.h"
+#import "LibraryViewController.h"
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
-#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
 extern "C" int ReforgedMain(int argc, char** argv);
 extern "C" void ReforgedSetMetalLayer(void* layer);
+extern "C" int ReforgedFpsTenths();
 
 // A view whose backing layer is a CAMetalLayer, which the Vulkan renderer draws into.
 @interface ReforgedView : UIView
@@ -23,12 +24,15 @@ extern "C" void ReforgedSetMetalLayer(void* layer);
 + (Class)layerClass { return [CAMetalLayer class]; }
 @end
 
-@interface AppDelegate () <UIDocumentPickerDelegate>
+@interface AppDelegate () <RFLibraryDelegate>
 @property(strong, nonatomic) UILabel* label;
-@property(strong, nonatomic) UIButton* chooseButton;
+@property(strong, nonatomic) UILabel* fpsLabel;
+@property(strong, nonatomic) NSTimer* fpsTimer;
 @property(strong, nonatomic) TouchControls* controls;
+@property(strong, nonatomic) UINavigationController* libraryNav;
 @property(nonatomic) BOOL started;
-@property(copy, nonatomic) NSString* xbe;
+@property(copy, nonatomic) NSString* docs;
+@property(copy, nonatomic) NSString* envNote;
 @end
 
 @implementation AppDelegate
@@ -57,92 +61,96 @@ extern "C" void ReforgedSetMetalLayer(void* layer);
   self.label.userInteractionEnabled = NO;
   [vc.view addSubview:self.label];
 
-  self.chooseButton = [UIButton buttonWithType:UIButtonTypeSystem];
-  [self.chooseButton setTitle:@"Choose disc image..." forState:UIControlStateNormal];
-  self.chooseButton.frame = CGRectMake(0, 0, 240, 44);
-  self.chooseButton.center = CGPointMake(vc.view.bounds.size.width / 2, vc.view.bounds.size.height / 2 + 60);
-  self.chooseButton.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin | UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin;
-  self.chooseButton.hidden = YES;
-  [self.chooseButton addTarget:self action:@selector(chooseDisc) forControlEvents:UIControlEventTouchUpInside];
-  [vc.view addSubview:self.chooseButton];
+  self.fpsLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, 110, 24)];
+  self.fpsLabel.font = [UIFont monospacedDigitSystemFontOfSize:13 weight:UIFontWeightSemibold];
+  self.fpsLabel.textColor = [UIColor whiteColor]; self.fpsLabel.textAlignment = NSTextAlignmentCenter;
+  self.fpsLabel.backgroundColor = [UIColor colorWithWhite:0 alpha:0.55]; self.fpsLabel.layer.cornerRadius = 6; self.fpsLabel.clipsToBounds = YES;
+  self.fpsLabel.userInteractionEnabled = NO; self.fpsLabel.hidden = YES;
+  [vc.view addSubview:self.fpsLabel];
 
   self.window.rootViewController = vc;
   [self.window makeKeyAndVisible];
   ReforgedSetMetalLayer((__bridge void*)layer);
 
   NSFileManager* fm = [NSFileManager defaultManager];
-  NSString* docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
-  [fm changeCurrentDirectoryPath:docs];
-  // Debug switches: Documents/reforged.env, one KEY=VALUE per line (# starts a comment); each becomes an environment variable before the runtime starts.
-  int envCount = 0; NSString* envNote = nil;
-  {
-    NSString* envText = [NSString stringWithContentsOfFile:[docs stringByAppendingPathComponent:@"reforged.env"] encoding:NSUTF8StringEncoding error:nil];
-    for (NSString* raw in [envText componentsSeparatedByCharactersInSet:[NSCharacterSet newlineCharacterSet]]) {
-      NSString* line = [raw stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
-      if (!line.length || [line hasPrefix:@"#"]) continue;
-      NSRange eq = [line rangeOfString:@"="]; if (eq.location == NSNotFound || eq.location == 0) continue;
-      setenv([[line substringToIndex:eq.location] UTF8String], [[line substringFromIndex:eq.location + 1] UTF8String], 1);
-      envCount++;
-    }
-    envNote = envText ? [NSString stringWithFormat:@"reforged.env found: %d setting(s) applied", envCount] : @"no reforged.env in the app folder";
-  }
-  NSString* bundle = [[NSBundle mainBundle] bundlePath];
-  self.xbe = [bundle stringByAppendingPathComponent:@"title/default.xbe"];
-  NSString* module = [bundle stringByAppendingPathComponent:@"Frameworks/reforged_game.dylib"];
-  BOOL haveGame = [fm fileExistsAtPath:self.xbe];
-  BOOL haveModule = [fm fileExistsAtPath:module];
+  self.docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+  [fm changeCurrentDirectoryPath:self.docs];
+  [self applyEnvironment];
 
-  if (!haveGame) {
+  NSString* bundle = [[NSBundle mainBundle] bundlePath];
+  NSArray<RFGame*>* games = [RFLibrary gamesInBundle:bundle documents:self.docs];
+  if (!games.count) {
     // Nothing to run: start the runtime briefly so it initialises and logs, and say what is missing.
     self.label.text = @"Reforged\nno game is installed\nuse the companion tool to build your copy";
+    setenv("REFORGED_LOG", [[self.docs stringByAppendingPathComponent:@"reforged.log"] UTF8String], 1);
     [self runWithIso:@"none" xbe:@"none" seconds:"2"];
     return YES;
   }
-  if (envNote) setenv("REFORGED_ENV_NOTE", [envNote UTF8String], 1);
-  // Diagnostics on by default for now (a reforged.env setting wins): every 2400 frames, log two frames draw by draw and save their images.
-  setenv("XBOX_DRAWLOG", "every=2400", 0); setenv("XBOX_FRAMEDUMP", "sync", 0); setenv("XBOX_DARKWATCH", "1", 0); setenv("XBOX_DRAWTEX", "size:103x19", 0);
-  setenv("XBOX_TITLE_DIR", [[bundle stringByAppendingPathComponent:@"title"] UTF8String], 1);
-  if (!haveModule) { self.label.text = @"Reforged\nthe game module is missing"; return YES; }
-  setenv("XBOX_LIFT", "1", 1);
-  setenv("XBOX_LIFT_MODULE", [module UTF8String], 1);
-
-  if ([fm fileExistsAtPath:[bundle stringByAppendingPathComponent:@"title/no-disc.txt"]]) { [self runWithIso:@"none" xbe:self.xbe seconds:"86400"]; return YES; }   // programs that need no disc (test programs, homebrew)
-  NSString* iso = [docs stringByAppendingPathComponent:@"game.iso"];
-  if (![fm fileExistsAtPath:iso]) {   // any disc image copied into the app's Documents folder (Files app / Finder file sharing) is used, whatever it is called
-    for (NSString* name in [[fm contentsOfDirectoryAtPath:docs error:nil] sortedArrayUsingSelector:@selector(compare:)]) {
-      NSString* ext = name.pathExtension.lowercaseString; if (([ext isEqualToString:@"iso"] || [ext isEqualToString:@"xiso"]) && ![name hasSuffix:@".tmp"]) { iso = [docs stringByAppendingPathComponent:name]; break; } }
+  if (getenv("REFORGED_AUTOSTART") && games.count == 1) {   // for automated tests: start the only game without showing the library
+    NSString* disc = [RFLibrary discForGame:games.firstObject documents:self.docs how:nil];
+    if (disc) { [self libraryWantsToPlay:games.firstObject disc:disc]; return YES; }
   }
-  if ([fm fileExistsAtPath:iso]) { [self runWithIso:iso xbe:self.xbe seconds:"86400"]; return YES; }
-  NSString* remembered = [self rememberedDisc];
-  if (remembered) { [self runWithIso:remembered xbe:self.xbe seconds:"86400"]; return YES; }
-  self.label.text = @"Reforged\nno disc image yet";
-  self.chooseButton.hidden = NO;
+  LibraryViewController* library = [[LibraryViewController alloc] initWithGames:games documents:self.docs];
+  library.delegate = self;
+  self.libraryNav = [[UINavigationController alloc] initWithRootViewController:library];
+  self.libraryNav.modalPresentationStyle = UIModalPresentationFullScreen;
+  dispatch_async(dispatch_get_main_queue(), ^{ [vc presentViewController:self.libraryNav animated:NO completion:nil]; });
   return YES;
 }
 
-// ---- disc image ----
-- (NSString*)rememberedDisc {
-  NSData* data = [[NSUserDefaults standardUserDefaults] dataForKey:@"discBookmark"]; if (!data) return nil;
-  BOOL stale = NO; NSError* err = nil;
-  NSURL* url = [NSURL URLByResolvingBookmarkData:data options:0 relativeToURL:nil bookmarkDataIsStale:&stale error:&err];
-  if (!url || ![url startAccessingSecurityScopedResource]) return nil;   // access stays open for the life of the app: the runtime reads the file in place
-  return url.path;
+// Saved settings first, then Documents/reforged.env (one KEY=VALUE per line, # starts a comment; each becomes an environment variable), which wins.
+- (void)applyEnvironment {
+  [RFSettings applyToEnvironment];
+  int envCount = 0; NSString* note = nil;
+  NSString* envText = [NSString stringWithContentsOfFile:[self.docs stringByAppendingPathComponent:@"reforged.env"] encoding:NSUTF8StringEncoding error:nil];
+  for (NSString* raw in [envText componentsSeparatedByCharactersInSet:[NSCharacterSet newlineCharacterSet]]) {
+    NSString* line = [raw stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+    if (!line.length || [line hasPrefix:@"#"]) continue;
+    NSRange eq = [line rangeOfString:@"="]; if (eq.location == NSNotFound || eq.location == 0) continue;
+    setenv([[line substringToIndex:eq.location] UTF8String], [[line substringFromIndex:eq.location + 1] UTF8String], 1);
+    envCount++;
+  }
+  note = envText ? [NSString stringWithFormat:@"reforged.env found: %d setting(s) applied", envCount] : @"no reforged.env in the app folder";
+  self.envNote = note;
+  setenv("REFORGED_ENV_NOTE", [note UTF8String], 1);
 }
 
-- (void)chooseDisc {
-  UIDocumentPickerViewController* picker = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeItem, UTTypeData, UTTypeDiskImage] asCopy:NO];
-  picker.delegate = self;
-  [self.window.rootViewController presentViewController:picker animated:YES completion:nil];
+// ---- library callbacks ----
+- (void)settingsChanged {
+  [self applyEnvironment];
+  [self.controls controllersChanged];
+  [self updateFpsCounter];
 }
 
-- (void)documentPicker:(UIDocumentPickerViewController*)controller didPickDocumentsAtURLs:(NSArray<NSURL*>*)urls {
-  NSURL* url = urls.firstObject; if (!url) return;
-  if (![url startAccessingSecurityScopedResource]) { self.label.text = @"Reforged\ncould not open that file"; return; }
-  NSError* err = nil;
-  NSData* bookmark = [url bookmarkDataWithOptions:0 includingResourceValuesForKeys:nil relativeToURL:nil error:&err];
-  if (bookmark) [[NSUserDefaults standardUserDefaults] setObject:bookmark forKey:@"discBookmark"];
-  self.chooseButton.hidden = YES;
-  [self runWithIso:url.path xbe:self.xbe seconds:"86400"];
+// The frame counter: shown while a game runs when the setting is on.
+- (void)updateFpsCounter {
+  BOOL show = [RFSettings showFps] && self.started;
+  self.fpsLabel.hidden = !show;
+  if (show) {
+    UIEdgeInsets in = self.window.safeAreaInsets;
+    self.fpsLabel.frame = CGRectMake(MAX(in.left, 12) + 6, MAX(in.top, 8) + 4, 110, 24);
+    if (!self.fpsTimer) {
+      self.fpsTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 repeats:YES block:^(NSTimer* t) {
+        int f = ReforgedFpsTenths();
+        self.fpsLabel.text = f > 0 ? [NSString stringWithFormat:@"%.1f fps", f / 10.0] : @"-- fps";
+      }];
+    }
+  } else { [self.fpsTimer invalidate]; self.fpsTimer = nil; }
+}
+
+- (void)libraryWantsToPlay:(RFGame*)game disc:(NSString*)disc {
+  if (self.started) return;
+  [self applyEnvironment];   // settings changed in the library, and reforged.env must still win
+  [RFLibrary prepareFolderForGame:game documents:self.docs];
+  if (!game.legacy) [[NSFileManager defaultManager] changeCurrentDirectoryPath:game.folder];   // the runtime's own files (virtual disk, console identity, caches) are relative to the working folder
+  setenv("REFORGED_LOG", [[self.docs stringByAppendingPathComponent:@"reforged.log"] UTF8String], 1);
+  setenv("XBOX_TITLE_DIR", [game.titleDir UTF8String], 1);
+  setenv("XBOX_LIFT", "1", 1);
+  setenv("XBOX_LIFT_MODULE", [game.module UTF8String], 1);
+  [self.controls controllersChanged];
+  [self.libraryNav.presentingViewController dismissViewControllerAnimated:YES completion:nil];
+  [self runWithIso:disc xbe:game.xbe seconds:"86400"];
+  [self updateFpsCounter];
 }
 
 // ---- runtime ----
@@ -156,7 +164,7 @@ extern "C" void ReforgedSetMetalLayer(void* layer);
     int rc = ReforgedMain(4, (char**)args);
     dispatch_async(dispatch_get_main_queue(), ^{
       self.label.hidden = NO;
-      self.label.text = [NSString stringWithFormat:@"Reforged\nthe runtime stopped (code %d)", rc];
+      self.label.text = [NSString stringWithFormat:@"Reforged\nthe runtime stopped (code %d)\nclose the app and open it again to play", rc];
     });
   });
 }

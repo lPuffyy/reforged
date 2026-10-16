@@ -77,3 +77,36 @@ void DiscList(const char* dirPath, std::vector<std::string>* names) {
     names->push_back(k.substr(prefix.size()));
   }
 }
+
+// Reads one file from the root of a disc image without touching the reader's global state (the app uses it to recognise which game a disc image is, before any
+// game starts). Returns a malloc'd buffer (the caller frees it) or nullptr.
+extern "C" uint8_t* ReforgedDiscReadRootFile(const char* isoPath, const char* fileName, uint32_t* outSize) {
+  plat::File* f = plat::FileOpen(isoPath, false, plat::Disp::OpenExisting, nullptr);
+  if (!f) return nullptr;
+  auto rd = [&](uint64_t off, void* dst, uint32_t len) { return plat::FileReadAt(f, dst, len, off) == (int64_t)len; };
+  uint8_t* result = nullptr; uint64_t base = 0; bool found = false;
+  for (uint64_t b : {0ull, 0x18300000ull, 0xFD90000ull, 0x2080000ull}) { char magic[20]; if (rd(b + 32 * S, magic, 20) && !memcmp(magic, "MICROSOFT*XBOX*MEDIA", 20)) { base = b; found = true; break; } }
+  uint32_t hdr[2];
+  if (found && rd(base + 32 * S + 20, hdr, 8) && hdr[1] > 0 && hdr[1] < (16u << 20)) {
+    std::vector<uint8_t> d(hdr[1]);
+    if (rd(base + (uint64_t)hdr[0] * S, d.data(), hdr[1])) {
+      std::string want = Lower(fileName); std::vector<uint32_t> stack = {0}; std::vector<bool> seen(d.size() / 4 + 1, false);
+      while (!stack.empty() && !result) {
+        uint32_t o = stack.back(); stack.pop_back();
+        if (o + 14 > d.size() || seen[o / 4]) continue;
+        seen[o / 4] = true;
+        uint16_t l, r; uint32_t sec, sz; uint8_t attr, nlen;
+        memcpy(&l, &d[o], 2); memcpy(&r, &d[o + 2], 2); memcpy(&sec, &d[o + 4], 4); memcpy(&sz, &d[o + 8], 4); attr = d[o + 12]; nlen = d[o + 13];
+        if (l == 0xFFFF || o + 14 + nlen > d.size()) continue;
+        if (l) stack.push_back(l * 4u);
+        if (r) stack.push_back(r * 4u);
+        if (!(attr & 0x10) && Lower(std::string((const char*)&d[o + 14], nlen)) == want && sz > 0 && sz < (256u << 20)) {
+          uint8_t* buf = (uint8_t*)malloc(sz);
+          if (buf && rd(base + (uint64_t)sec * S, buf, sz)) { result = buf; *outSize = sz; } else free(buf);
+        }
+      }
+    }
+  }
+  plat::FileClose(f);
+  return result;
+}

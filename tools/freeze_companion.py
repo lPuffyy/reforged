@@ -12,7 +12,7 @@ for d, _, files in os.walk(os.path.join(ROOT, 'src', 'freestanding')):
     for f in files: data.append((os.path.join(d, f), os.path.relpath(d, ROOT)))
 cmd = [sys.executable, '-m', 'PyInstaller', '--onefile', '--noconfirm', '--clean', '--name', 'reforged-companion', '--distpath', a.out,
        '--workpath', os.path.join(a.out, 'build'), '--specpath', os.path.join(a.out, 'build'), '--paths', os.path.join(ROOT, 'tools'),
-       '--hidden-import', 'xiso', '--hidden-import', 'ed25519', '--collect-all', 'capstone']
+       '--hidden-import', 'xiso', '--hidden-import', 'xbe_meta', '--hidden-import', 'ed25519', '--collect-all', 'capstone']
 # the bundled tools run through runpy, so PyInstaller cannot see their imports
 for m in ('concurrent.futures', 'argparse', 'glob', 're', 'shutil', 'subprocess', 'struct', 'hashlib', 'json', 'zipfile', 'urllib.request', 'tarfile', 'tempfile', 'collections', 'itertools', 'time'):
     cmd += ['--hidden-import', m]

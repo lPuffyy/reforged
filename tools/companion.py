@@ -132,18 +132,51 @@ def scan_symbols(xbe_path, cli, out_path):
     open(out_path, 'w', encoding='utf-8').write(text)
     return len(re.findall(r'= 0x[0-9a-fA-F]+', text))
 
-def write_personal_ipa(base_ipa_bytes, out_path, files):
-    """Copies the app and adds `files` ({path inside the .app: bytes}); permissions of the original entries are preserved."""
+def write_personal_ipa(base_ipa_bytes, out_path, files, drop=()):
+    """Copies the app and adds `files` ({path inside the .app: bytes}); permissions of the original entries are preserved. Paths in `drop` (relative to the .app) are left out;
+    a file in `files` replaces a file of the same name."""
     zin = zipfile.ZipFile(io.BytesIO(base_ipa_bytes))
     app = next((n.split('/')[1] for n in zin.namelist() if n.startswith('Payload/') and n.count('/') >= 2 and n.split('/')[1].endswith('.app')), None)
     if not app: die('the app file has no .app inside Payload/')
+    skip = {'Payload/%s/%s' % (app, d) for d in drop} | {'Payload/%s/%s' % (app, r) for r in files}
     with zipfile.ZipFile(out_path, 'w', zipfile.ZIP_DEFLATED) as zout:
-        for info in zin.infolist(): zout.writestr(info, zin.read(info.filename))
+        for info in zin.infolist():
+            if info.filename not in skip: zout.writestr(info, zin.read(info.filename))
         for rel, data in files.items():
             zi = zipfile.ZipInfo('Payload/%s/%s' % (app, rel), date_time=time.localtime()[:6]); zi.compress_type = zipfile.ZIP_DEFLATED
             zi.external_attr = 0o644 << 16
             zout.writestr(zi, data)
     return app
+
+
+def game_entry(gid, meta, no_disc, legacy_state=False):
+    g16 = gid[:16]
+    e = {'id': gid, 'name': meta.get('name') or 'Game %s' % gid[:8], 'module': 'Frameworks/game-%s.dylib' % g16, 'title': 'Games/%s/title' % g16, 'noDisc': bool(no_disc), 'legacyState': bool(legacy_state)}
+    for k_out, k_in in (('titleId', 'title_id'), ('regions', 'regions'), ('version', 'version'), ('built', 'built')):
+        if meta.get(k_in) not in (None, [], ''): e[k_out] = meta[k_in]
+    if meta.get('icon_png'): e['icon'] = 'Games/%s/icon.png' % g16
+    return e
+
+
+def library_from_app(base_ipa_bytes):
+    """What games an app file already holds: returns (manifest dict, {rel path: bytes} of the files that must be re-added, [paths to drop]).
+    An older single-game app (title/ and Frameworks/reforged_game.dylib) is converted to the library layout."""
+    import hashlib, xbe_meta
+    z = zipfile.ZipFile(io.BytesIO(base_ipa_bytes))
+    app = next((n.split('/')[1] for n in z.namelist() if n.startswith('Payload/') and n.count('/') >= 2 and n.split('/')[1].endswith('.app')), None)
+    if not app: die('the app file has no .app inside Payload/')
+    pre = 'Payload/%s/' % app; names = set(z.namelist())
+    if pre + 'Games/games.json' in names: return json.loads(z.read(pre + 'Games/games.json').decode('utf-8')), {}, []
+    if pre + 'title/default.xbe' in names and pre + 'Frameworks/reforged_game.dylib' in names:
+        xbe = z.read(pre + 'title/default.xbe'); gid = hashlib.sha256(xbe).hexdigest(); g16 = gid[:16]
+        files = {'Frameworks/game-%s.dylib' % g16: z.read(pre + 'Frameworks/reforged_game.dylib')}; drop = ['Frameworks/reforged_game.dylib']
+        for n in sorted(names):
+            if n.startswith(pre + 'title/') and not n.endswith('/'):
+                rel = n[len(pre):]; files['Games/%s/%s' % (g16, rel)] = z.read(n); drop.append(rel)
+        m = xbe_meta.read_meta(xbe); entry = game_entry(gid, m, 'title/no-disc.txt' in drop, True)
+        if m.get('icon_png'): files['Games/%s/icon.png' % g16] = m['icon_png']
+        return {'version': 1, 'games': [entry]}, files, drop
+    return {'version': 1, 'games': []}, {}, []
 
 
 def main():
@@ -162,6 +195,7 @@ def main():
     ap.add_argument('--title-data', default='', help='folder of per-title files (patches.txt, fs_patches.txt, ...) to add to the app; they replace generated files of the same name')
     ap.add_argument('--pubkey', default=RELEASE_PUBLIC_KEY, help='release signing public key (hex)')
     ap.add_argument('--work', default='', help='working directory (default: a temporary one)')
+    ap.add_argument('--add-to', default='', help='an existing personal app: add this game to it (the games already in it stay) instead of starting from the downloaded app')
     ap.add_argument('--keep', action='store_true')
     a = ap.parse_args()
     steps = 7
@@ -182,7 +216,8 @@ def main():
     title = os.path.join(work, 'title'); os.makedirs(title, exist_ok=True)
 
     say(2, steps, 'getting the app')
-    if a.ipa: base = open(a.ipa, 'rb').read()
+    if a.add_to: base = open(a.add_to, 'rb').read(); print('  adding to your existing app: %s' % a.add_to)
+    elif a.ipa: base = open(a.ipa, 'rb').read()
     else: base = download_release_ipa(a.pubkey)
 
     say(3, steps, "preparing the toolchain")
@@ -228,11 +263,26 @@ def main():
     if rc != 0: die('the module did not build')
 
     say(7, steps, 'writing your personal app')
-    files = {'Frameworks/reforged_game.dylib': open(module, 'rb').read(), 'title/default.xbe': xbe}
-    for f in os.listdir(title): files['title/' + f] = open(os.path.join(title, f), 'rb').read()
-    if a.no_disc: files['title/no-disc.txt'] = b'no disc needed\n'
-    out_path = a.out or os.path.join(os.path.dirname(os.path.abspath(iso)), os.path.splitext(os.path.basename(iso))[0] + '-personal.ipa')
-    write_personal_ipa(base, out_path, files)
+    import hashlib, xbe_meta
+    gid = hashlib.sha256(xbe).hexdigest(); g16 = gid[:16]
+    meta = xbe_meta.read_meta(xbe)
+    print('  game: %s%s' % (meta.get('name') or 'unnamed', (' (title id %s)' % meta['title_id']) if meta.get('title_id') else ''))
+    manifest, files, drop = library_from_app(base)   # games already in the app (an older single-game app is converted)
+    files['Frameworks/game-%s.dylib' % g16] = open(module, 'rb').read()
+    files['Games/%s/title/default.xbe' % g16] = xbe
+    for f in os.listdir(title): files['Games/%s/title/%s' % (g16, f)] = open(os.path.join(title, f), 'rb').read()
+    if a.no_disc: files['Games/%s/title/no-disc.txt' % g16] = b'no disc needed' + bytes([10])
+    if meta.get('icon_png'): files['Games/%s/icon.png' % g16] = meta['icon_png']
+    entry = game_entry(gid, meta, a.no_disc)
+    old = next((g for g in manifest['games'] if g.get('id') == gid), None)
+    if old and old.get('legacyState'): entry['legacyState'] = True   # keep the link to files an older single-game app left behind
+    manifest['games'] = [g for g in manifest['games'] if g.get('id') != gid] + [entry]
+    files['Games/games.json'] = json.dumps(manifest, indent=1).encode('utf-8')
+    print('  the app now holds %d game(s): %s' % (len(manifest['games']), ', '.join(g.get('name', '?') for g in manifest['games'])))
+    if a.out: out_path = a.out
+    elif a.add_to: out_path = os.path.join(os.path.dirname(os.path.abspath(a.add_to)), os.path.splitext(os.path.basename(a.add_to))[0] + '-library.ipa')
+    else: out_path = os.path.join(os.path.dirname(os.path.abspath(iso)), os.path.splitext(os.path.basename(iso))[0] + '-personal.ipa')
+    write_personal_ipa(base, out_path, files, drop)
     print('\nDone: %s' % out_path)
     print('Open it in AltStore, SideStore or Sideloadly to install it, then copy %s to the device (Files app / Finder file sharing)' % os.path.basename(iso))
     print('and choose it in the app. This file contains code made from your disc: keep it to yourself. Nothing was uploaded.')

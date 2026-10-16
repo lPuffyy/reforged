@@ -3,12 +3,14 @@
 #ifdef __APPLE__
 #import <GameController/GameController.h>
 #include "input.h"
+#include "kernel.h"
 
 static int16_t Axis(float v) { return (int16_t)(v * 32767.f); }
 
 void InputPollPlatform(HostPad& p) {
   GCController* pad = nil;
   for (GCController* c in [GCController controllers]) if (c.extendedGamepad) { pad = c; break; }
+  { static GCController* last = nil; if (pad != last) { last = pad; Log("[input] %s", pad ? [[NSString stringWithFormat:@"controller in use: %@ (%@)", pad.vendorName ?: @"unknown", pad.productCategory ?: @""] UTF8String] : "no controller"); } }   // logged when the controller in use changes
   if (!pad) return;
   GCExtendedGamepad* g = pad.extendedGamepad;
   if (g.dpad.up.pressed) p.buttons |= PAD_UP;

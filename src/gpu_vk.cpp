@@ -10,6 +10,7 @@
 #include "vk_shaders.h"
 #include <vulkan/vulkan.h>
 #include <algorithm>
+#include <atomic>
 #include <array>
 #include <cstdio>
 #include <cstdlib>
@@ -659,8 +660,13 @@ static void WriteDump(int flip, const DumpReq& d) {
   fclose(f);
 }
 
+static std::atomic<int> g_fpsTenths{0}; static std::atomic<uint64_t> g_fpsStamp{0};   // frame rate over the last half second, and when it was measured
+extern "C" int ReforgedFpsTenths() {   // frames per second times ten (0 when nothing has been drawn for a moment); read by the app's frame counter
+  uint64_t st = g_fpsStamp.load(); return st && NowUs() - st < 1500000 ? g_fpsTenths.load() : 0;
+}
 void GpuFlip() {
   uint64_t t = NowUs(); if (!g_statT0) g_statT0 = t;
+  { static uint64_t t0 = 0; static int n = 0; ++n; if (!t0) t0 = t; if (t - t0 >= 500000) { g_fpsTenths = (int)((uint64_t)n * 10000000ull / (t - t0)); g_fpsStamp = t; n = 0; t0 = t; } }
   GpuFlipImpl();
   uint64_t t2 = NowUs(); g_statFlipUs += t2 - t; ++g_statFlips;
   if (t2 - g_statT0 >= 1000000) { Log("[perf] %llu flips, %llu draws, draw %llu ms (tex %llu, desc %llu), flip %llu ms per %llu ms", (unsigned long long)g_statFlips, (unsigned long long)g_statDraws, (unsigned long long)(g_statDrawUs / 1000), (unsigned long long)(g_tTexUs / 1000), (unsigned long long)(g_tDescUs / 1000), (unsigned long long)(g_statFlipUs / 1000), (unsigned long long)((t2 - g_statT0) / 1000)); g_statFlips = g_statDraws = g_statDrawUs = g_statFlipUs = g_tTexUs = g_tDescUs = 0; g_statT0 = t2; }
