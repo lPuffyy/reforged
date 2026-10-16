@@ -158,7 +158,7 @@ def game_entry(gid, meta, no_disc, legacy_state=False):
     return e
 
 
-def library_from_app(base_ipa_bytes):
+def library_from_app(base_ipa_bytes, carry_all=False):
     """What games an app file already holds: returns (manifest dict, {rel path: bytes} of the files that must be re-added, [paths to drop]).
     An older single-game app (title/ and Frameworks/reforged_game.dylib) is converted to the library layout."""
     import hashlib, xbe_meta
@@ -166,7 +166,14 @@ def library_from_app(base_ipa_bytes):
     app = next((n.split('/')[1] for n in z.namelist() if n.startswith('Payload/') and n.count('/') >= 2 and n.split('/')[1].endswith('.app')), None)
     if not app: die('the app file has no .app inside Payload/')
     pre = 'Payload/%s/' % app; names = set(z.namelist())
-    if pre + 'Games/games.json' in names: return json.loads(z.read(pre + 'Games/games.json').decode('utf-8')), {}, []
+    if pre + 'Games/games.json' in names:
+        manifest = json.loads(z.read(pre + 'Games/games.json').decode('utf-8'))
+        files = {}
+        if carry_all:   # the games of this app go into another (newer) app: take their modules and files along
+            for n in sorted(names):
+                rel = n[len(pre):] if n.startswith(pre) else ''
+                if rel.startswith('Games/') and not n.endswith('/') or (rel.startswith('Frameworks/game-') and rel.endswith('.dylib')): files[rel] = z.read(n)
+        return manifest, files, []
     if pre + 'title/default.xbe' in names and pre + 'Frameworks/reforged_game.dylib' in names:
         xbe = z.read(pre + 'title/default.xbe'); gid = hashlib.sha256(xbe).hexdigest(); g16 = gid[:16]
         files = {'Frameworks/game-%s.dylib' % g16: z.read(pre + 'Frameworks/reforged_game.dylib')}; drop = ['Frameworks/reforged_game.dylib']
@@ -195,7 +202,7 @@ def main():
     ap.add_argument('--title-data', default='', help='folder of per-title files (patches.txt, fs_patches.txt, ...) to add to the app; they replace generated files of the same name')
     ap.add_argument('--pubkey', default=RELEASE_PUBLIC_KEY, help='release signing public key (hex)')
     ap.add_argument('--work', default='', help='working directory (default: a temporary one)')
-    ap.add_argument('--add-to', default='', help='an existing personal app: add this game to it (the games already in it stay) instead of starting from the downloaded app')
+    ap.add_argument('--add-to', default='', help='an existing personal app: add this game to it (the games already in it stay) instead of starting from the downloaded app. Together with --ipa <newer app> the games of this app are moved into the newer app without rebuilding them (use apps from the same release series)')
     ap.add_argument('--relay', default='', help='host[:port] of a System Link relay to build in as this app\'s default (players can change or turn it off in the app); it is not a default for anyone else')
     ap.add_argument('--relay-room', default='', help='the default room name for --relay')
     ap.add_argument('--keep', action='store_true')
@@ -221,7 +228,8 @@ def main():
     title = os.path.join(work, 'title'); os.makedirs(title, exist_ok=True)
 
     say(2, steps, 'getting the app')
-    if a.add_to: base = open(a.add_to, 'rb').read(); print('  adding to your existing app: %s' % a.add_to)
+    if a.add_to and a.ipa: base = open(a.ipa, 'rb').read(); print('  moving the games of %s into the app %s' % (a.add_to, a.ipa))
+    elif a.add_to: base = open(a.add_to, 'rb').read(); print('  adding to your existing app: %s' % a.add_to)
     elif a.ipa: base = open(a.ipa, 'rb').read()
     else: base = download_release_ipa(a.pubkey)
 
@@ -272,7 +280,8 @@ def main():
     gid = hashlib.sha256(xbe).hexdigest(); g16 = gid[:16]
     meta = xbe_meta.read_meta(xbe)
     print('  game: %s%s' % (meta.get('name') or 'unnamed', (' (title id %s)' % meta['title_id']) if meta.get('title_id') else ''))
-    manifest, files, drop = library_from_app(base)   # games already in the app (an older single-game app is converted)
+    if a.add_to and a.ipa: manifest, files, drop = library_from_app(open(a.add_to, 'rb').read(), carry_all=True)   # the games of the old app, carried into the new one
+    else: manifest, files, drop = library_from_app(base)   # games already in the app (an older single-game app is converted)
     files['Frameworks/game-%s.dylib' % g16] = open(module, 'rb').read()
     files['Games/%s/title/default.xbe' % g16] = xbe
     for f in os.listdir(title): files['Games/%s/title/%s' % (g16, f)] = open(os.path.join(title, f), 'rb').read()
