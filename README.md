@@ -35,6 +35,8 @@ executable (a program that is not listed is translated without patches); `--titl
 
 Full instructions, controls, settings and troubleshooting: **[docs/USAGE.md](docs/USAGE.md)**. A multi-game library is planned (see [docs/COMPANION.md](docs/COMPANION.md)).
 
+**Compatibility list:** what has been tried and how it ran is kept in a separate repository, [reforged-compat](https://github.com/lPuffyy/reforged-compat).
+
 ## Layout
 | Path | What |
 |---|---|

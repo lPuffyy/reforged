@@ -28,5 +28,8 @@ build a personal iOS app from your own disc image and play on a recent iPhone or
 It contains no game code, console firmware, keys or assets, and is not affiliated with or endorsed by any console maker or game publisher. You must supply a disc
 you own. Everything the companion makes is for your own use; do not share personal apps. See [docs/LEGAL.md](https://github.com/lPuffyy/reforged/blob/main/docs/LEGAL.md).
 
+## Compatibility
+Results for tested programs are kept in [reforged-compat](https://github.com/lPuffyy/reforged-compat). The companion prints the executable hash that identifies your build; use it to look up or send a report.
+
 ## Reporting problems
 Include device model, iOS version, sideloading tool, the companion's output and `reforged.log` from the app's folder. Never attach disc images or anything made from them.

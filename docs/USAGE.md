@@ -112,7 +112,7 @@ This is a preview. Things you should expect:
 | The app opens and closes | Open the Files app, copy out `reforged.log` and read the last lines; attach it when reporting. |
 
 ## Compatibility reports
-The companion prints the **executable hash (SHA-256)** of your disc's main program near the start. That value identifies the exact build, so it is what a compatibility report is keyed by. A compatibility list is kept in a separate repository (results only, no game files); once it is public this guide will link to it.
+The companion prints the **executable hash (SHA-256)** of your disc's main program near the start. That value identifies the exact build, so it is what a compatibility report is keyed by. The compatibility list lives in a separate repository, [reforged-compat](https://github.com/lPuffyy/reforged-compat) (results only, no game files): look your hash up there, and send your own result with its report form.
 
 ## Reporting problems
 Open an issue on the project's page with: device model and iOS version, which sideloading tool, the companion's output, and `reforged.log`.
