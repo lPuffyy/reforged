@@ -56,8 +56,13 @@ def http_get(url, max_bytes=2_000_000_000):
 def download_release_ipa(pubkey_hex, version=None):
     import ed25519
     if not pubkey_hex: die('this build of the companion has no release key built in; use --ipa <file> with an app you trust')
-    api = 'https://api.github.com/repos/%s/releases/%s' % (REPO, 'tags/' + version if version else 'latest')
-    rel = json.loads(http_get(api))
+    if version: rel = json.loads(http_get('https://api.github.com/repos/%s/releases/tags/%s' % (REPO, version)))
+    else:
+        # The newest versioned release that carries a signed app. (GitHub's "latest release" is not used: other releases, such as the compiler toolchain, can take that slot.)
+        rels = json.loads(http_get('https://api.github.com/repos/%s/releases?per_page=30' % REPO))
+        def signed_app(r): return not r.get('draft') and r.get('tag_name', '').startswith('v') and any(a['name'].endswith('.ipa.sig') for a in r['assets']) and any(a['name'].endswith('.ipa') for a in r['assets'])
+        rel = next((r for r in rels if signed_app(r)), None)
+        if not rel: die('no released app was found on the project page yet; use --ipa <file> with an app you trust')
     ipa = next((a for a in rel['assets'] if a['name'].endswith('.ipa')), None)
     sig = next((a for a in rel['assets'] if a['name'] == (ipa['name'] + '.sig' if ipa else '')), None)
     if not ipa or not sig: die('release %s has no signed app' % rel.get('tag_name'))

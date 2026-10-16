@@ -108,7 +108,7 @@ jobs:
           for f in toolchain-*.zip; do openssl pkeyutl -sign -rawin -inkey "$RUNNER_TEMP/key.pem" -in "$f" -out "$f.sig"; done
           rm -f "$RUNNER_TEMP/key.pem"
           gh release delete toolchain -y --cleanup-tag || true
-          gh release create toolchain toolchain-*.zip toolchain-*.zip.sig --title "Toolchain pack" \
+          gh release create toolchain toolchain-*.zip toolchain-*.zip.sig --prerelease --title "Toolchain pack" \
             --notes "Compiler toolchain (LLVM $LLVM_VERSION: clang and lld, unmodified) and symbol scanner (XbSymbolDatabase, MIT) used by the companion tool. Signed with the project release key. Licenses are inside each pack."
 
   # Unsigned preview of the packs (for testing the companion with --toolchain before the release key exists).
