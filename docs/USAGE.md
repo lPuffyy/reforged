@@ -23,7 +23,7 @@ tool and give it the disc image. Nothing is uploaded at any step, and the person
 ## Step by step
 
 ### 1. Get the companion tool
-Download the file for your system from the project's Releases page: `reforged-companion` (macOS and Linux) or `reforged-companion.exe` (Windows).
+Download the file for your system from the project's [Releases page](https://github.com/lPuffyy/reforged/releases/latest): `reforged-companion-windows-x64.exe`, `reforged-companion-macos-arm64` (Apple silicon) or `reforged-companion-linux-x64`. On macOS and Linux make it executable first (`chmod +x <file>`); on macOS you may have to allow it in System Settings > Privacy & Security the first time, because it is not signed by Apple. `companion.sha256` on the same page lets you check the download.
 The tool checks an Ed25519 signature on everything it downloads from this project.
 
 ### 2. Put the disc image next to it
@@ -106,7 +106,7 @@ This is a preview. Things you should expect:
 ## Troubleshooting
 | Symptom | What to do |
 |---|---|
-| The companion says no disc image was found | Put the `.iso` in the same folder, or run `reforged-companion --iso <file>`. |
+| The companion says no disc image was found | Put the `.iso` in the same folder, or run `<companion file> --iso <file>`. |
 | "not one the project has tested" | The disc is a different build from the tested one. It may still work; if it does not, there is nothing to tune yet. |
 | The download step fails | Check your connection; run again. To use a file you already have: `--ipa <app file>` and `--toolchain <unpacked folder>`. |
 | The build step fails | Make sure there are 10 GB free, and run again; send the last lines of the tool's output (never the disc image or the generated files). |

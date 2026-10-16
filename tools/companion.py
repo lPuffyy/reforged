@@ -95,7 +95,8 @@ def get_toolchain(pubkey_hex):
     host = host_id(); dest = os.path.join(cache_dir(), host)
     if os.path.exists(os.path.join(dest, 'manifest.json')): return dest
     if not pubkey_hex: die('this build of the companion has no release key built in; use --toolchain <folder> or --clang/--lld')
-    rel = json.loads(http_get('https://api.github.com/repos/%s/releases/tags/toolchain' % REPO))
+    try: rel = json.loads(http_get('https://api.github.com/repos/%s/releases/tags/toolchain' % REPO))
+    except Exception as e: die('could not find the published compiler toolchain (%s). If this is a brand-new release the maintainer may not have published it yet; check the project page and try again later, or pass --toolchain <folder>.' % e)
     name = 'toolchain-%s.zip' % host
     asset = next((x for x in rel['assets'] if x['name'] == name), None); sig = next((x for x in rel['assets'] if x['name'] == name + '.sig'), None)
     if not asset or not sig: die('no toolchain pack is published for this computer (%s)' % host)

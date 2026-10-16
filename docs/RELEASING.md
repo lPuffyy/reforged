@@ -27,8 +27,9 @@ The workflow builds the unsigned app, signs it, checks the signature with the co
 3. Read `docs/USAGE.md` against the actual behaviour (file names, steps, controls, known problems) and fix anything stale. Update `docs/RELEASE_NOTES_v0.1.0.md`
    (the release workflow uses it as the release text).
 4. `python -I tools/check_clean.py` passes: no game names, game-derived files or keys in tracked files.
-5. The release secret and public key are in place (see one-time setup) and the companion in the release verifies the signed app.
-6. Tag and push (below). After the workflow finishes, download the released companion for one OS and run it once against a test program.
+5. **The signed toolchain packs are published.** The companion downloads its compiler from a release tagged `toolchain`, which is only created by running the `toolchain` workflow manually (Actions, toolchain, Run workflow) with the signing secret set. Do this *before* announcing the release, and confirm the release `toolchain` has three `.zip` files with `.sig` files.
+6. The release secret and public key are in place (see one-time setup) and the companion in the release verifies the signed app.
+7. Tag and push (below). After the workflow finishes, download the released companion for one OS and run it once, with an empty cache, against a generated test disc (`tests/make_test_iso.py`): it must download the app and the toolchain, verify both signatures and write a personal app.
 
 ## What is in the app
 The runtime, the iOS shell and the Vulkan-on-Metal layer (MoltenVK, Apache-2.0, pinned by SHA-256 in `ios/build_ipa.sh`, license included in the bundle).

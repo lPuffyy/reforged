@@ -7,7 +7,7 @@ build a personal iOS app from your own disc image and play on a recent iPhone or
 
 ## What is in this release
 - **The generic app** (`Reforged-v0.1.0.ipa`, with `.sig` and `.sha256`): the runtime, iOS shell, touch controls and the Vulkan-on-Metal layer. It contains no game code.
-- **The companion tool** (`reforged-companion` for macOS and Linux, `reforged-companion.exe` for Windows): reads your disc image, translates the game's program on your
+- **The companion tool** (`reforged-companion-windows-x64.exe`, `reforged-companion-macos-arm64`, `reforged-companion-linux-x64`): reads your disc image, translates the game's program on your
   computer, builds the game module for iOS, and writes a personal app you sideload (AltStore, SideStore or Sideloadly).
 - **Toolchain packs** (compiler and linker, signed): downloaded once by the companion.
 
