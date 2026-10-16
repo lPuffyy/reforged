@@ -63,6 +63,10 @@ The companion can add a game to an app you already have: run it with `--add-to <
 stay, and you install the result over the old app. Each game keeps its own saves and settings in `Games/<id>/` inside the app's folder, and a single-game app made by an
 older companion is converted automatically the first time you add a game to it (its saves stay with it). Each game adds about 130 MB to the app.
 
+To update the app itself without rebuilding your games, download or build a newer app and run the companion with `--ipa <newer app> --add-to <your old personal app>` (add
+`--add-to` more than once to bring several apps together). The games are moved into the newer app; use apps from the same release series. If the disc you give is a game
+that is already in one of those apps, its translated code is reused and nothing is rebuilt.
+
 ## Controls
 Touch controls fill the screen, laid out like a controller:
 - Left stick (bottom left) and right stick (bottom right) with **L3** / **R3** buttons beside them, and a **direction pad** (four arrow buttons) above the left stick.

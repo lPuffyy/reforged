@@ -2,9 +2,17 @@
 
 A portable runtime and static translator for running original-hardware console software you own, on modern devices.
 
-**Status: early engineering preview.** One real retail title boots and plays on Windows (x64) and on an iPhone (A17 Pro): menus, campaign and multiplayer
-run at the game's 30 frames per second from a personal app built on the user's own machine. Known problems: occasional wrong lighting or post-processing on
-the phone's GPU path, and some levels untested. See **[docs/USAGE.md](docs/USAGE.md)** to get it running and [docs/PORTING.md](docs/PORTING.md) for the open work.
+**Status: early engineering preview.** One real retail title boots and plays on Windows (x64) and on an iPhone (A17 Pro): menus, campaign and System Link
+multiplayer (also over the Internet through a relay) run from a personal app built on the user's own machine. Other titles are untested and will probably need work.
+Known problems: occasional wrong lighting or post-processing on the phone's GPU path, frame-rate dips while new textures load, and no real MSAA or anisotropic
+filtering yet. See **[docs/USAGE.md](docs/USAGE.md)** to get it running and [docs/PORTING.md](docs/PORTING.md) for the open work.
+
+## What the iOS app has
+- **A game library**: one app holds several games, each with its icon, title and details read from your own disc, and its own saves, settings and caches.
+- **A settings screen**: on-screen controls (automatic, always, never), a frame-rate counter, render resolution (1x, 2x, 3x), System Link relay options and a Diagnostics switch.
+- **Controls**: on-screen sticks, buttons and a direction pad; they hide while a physical controller is connected and return when it disconnects.
+- **System Link over the Internet**: connect to a relay server or host one from the app ([docs/RELAY.md](docs/RELAY.md)). A relay is filled in by default and is off until you turn it on.
+- **Stays awake while playing, and survives leaving the app**: the game pauses in the background and the picture comes back when you return.
 
 ## Start here
 | I want to... | Go to |
@@ -40,11 +48,13 @@ image in the app's folder (Files app) or pick it in the app. Nothing it produces
 Releases are signed with an Ed25519 key; the companion checks the signature on what it downloads. Details: [docs/COMPANION.md](docs/COMPANION.md),
 [docs/RELEASING.md](docs/RELEASING.md).
 
-Until the first release exists, CI publishes unsigned *preview* builds (generic app and toolchain packs, no game code) as pre-releases that the
-companion can use with `--ipa` and `--toolchain`. Small per-program byte patches live in `tools/title_patches.json`, keyed by the SHA-256 of the main
+Signed releases are on the releases page. In between, CI publishes unsigned *preview* builds of the current code (generic app and toolchain packs, no game code)
+as pre-releases that the companion can use with `--ipa` and `--toolchain`. Small per-program byte patches live in `tools/title_patches.json`, keyed by the SHA-256 of the main
 executable (a program that is not listed is translated without patches); `--title-data` still accepts a folder of your own files.
 
-Full instructions, controls, settings and troubleshooting: **[docs/USAGE.md](docs/USAGE.md)**. A multi-game library is planned (see [docs/COMPANION.md](docs/COMPANION.md)).
+Full instructions, controls, settings and troubleshooting: **[docs/USAGE.md](docs/USAGE.md)**. To put several games in one app, run the companion again for each
+disc with `--add-to <your app>` (games already in it are kept, and are not rebuilt); with `--ipa <newer app> --add-to <old app>` the games are moved into a newer app
+without rebuilding them. See [docs/COMPANION.md](docs/COMPANION.md).
 
 **Compatibility list:** what has been tried and how it ran is kept in a separate repository, [reforged-compat](https://github.com/lPuffyy/reforged-compat).
 
