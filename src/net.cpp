@@ -42,18 +42,27 @@ void ToGuest(const uint8_t* f, uint32_t len) { Pcap(f, len); NvnetReceive(f, len
 // ---- LAN relay (System Link over the Internet): XBOX_RELAY=host:port. Every Ethernet frame that is not meant for our own router is sent to a relay server (tools/relay.py),
 // which hubs it to the other consoles; frames from the relay go straight to the guest. Datagram = "XRL1" + frame; a bare "XRL1" is a keepalive/registration.
 SOCKET g_relay = INVALID_SOCKET; sockaddr_in g_relayAddr; bool g_relayOn = false;
+// Rooms: with XBOX_RELAY_ROOM set, datagrams carry "XRL2" + a 16-byte key for the room name (FNV-1a 64 twice, the same function as tools/relay.py) so the relay keeps rooms apart.
+bool g_relayRoom = false; uint8_t g_roomKey[16]; bool g_ipExplicit = false;
+void MakeRoomKey(const char* name) {
+  for (int k = 0; k < 2; k++) { uint64_t h = k ? 0x84222325CBF29CE4ull : 0xCBF29CE484222325ull; for (const char* c = name; *c; c++) { h ^= (uint8_t)*c; h *= 0x100000001B3ull; } for (int i = 0; i < 8; i++) g_roomKey[k * 8 + i] = (uint8_t)(h >> (56 - 8 * i)); }
+  g_relayRoom = true;
+}
+uint32_t RelayHeader(uint8_t* out) { if (!g_relayRoom) { memcpy(out, "XRL1", 4); return 4; } memcpy(out, "XRL2", 4); memcpy(out + 4, g_roomKey, 16); return 20; }
 bool ForRelay(const uint8_t* f, uint32_t len) {   // frames that belong on the virtual LAN rather than to the user-mode router
   if (!g_relayOn || len < 14) return false;
   if (memcmp(f, kGwMac, 6) == 0) return false;                       // unicast to our gateway
   return true;
 }
-void RelaySend(const uint8_t* f, uint32_t len) { if (g_relay == INVALID_SOCKET) return; std::vector<uint8_t> d(4 + len); memcpy(d.data(), "XRL1", 4); memcpy(d.data() + 4, f, len); sendto(g_relay, (const char*)d.data(), (int)d.size(), 0, (sockaddr*)&g_relayAddr, sizeof g_relayAddr); }
+void RelaySend(const uint8_t* f, uint32_t len) { if (g_relay == INVALID_SOCKET) return; std::vector<uint8_t> d(20 + len); uint32_t h = RelayHeader(d.data()); memcpy(d.data() + h, f, len); d.resize(h + len); sendto(g_relay, (const char*)d.data(), (int)d.size(), 0, (sockaddr*)&g_relayAddr, sizeof g_relayAddr); }
 uint32_t RelayThread(void* ) {
   uint8_t buf[2200]; uint32_t lastKeep = 0;
   for (;;) {
-    if ((uint32_t)plat::TickMs() - lastKeep > 4000) { lastKeep = (uint32_t)plat::TickMs(); sendto(g_relay, "XRL1", 4, 0, (sockaddr*)&g_relayAddr, sizeof g_relayAddr); }
+    if ((uint32_t)plat::TickMs() - lastKeep > 4000) { lastKeep = (uint32_t)plat::TickMs(); uint8_t hd[20]; uint32_t hn = RelayHeader(hd); sendto(g_relay, (const char*)hd, (int)hn, 0, (sockaddr*)&g_relayAddr, sizeof g_relayAddr); }
     fd_set rs; FD_ZERO(&rs); FD_SET(g_relay, &rs); timeval tv{1, 0}; if (select((int)g_relay + 1, &rs, nullptr, nullptr, &tv) <= 0) continue;
-    int n = recv(g_relay, (char*)buf, sizeof buf, 0); if (n > 18 && !memcmp(buf, "XRL1", 4)) ToGuest(buf + 4, (uint32_t)n - 4);
+    int n = recv(g_relay, (char*)buf, sizeof buf, 0);
+    if (n > 18 && !g_relayRoom && !memcmp(buf, "XRL1", 4)) ToGuest(buf + 4, (uint32_t)n - 4);
+    else if (n > 34 && g_relayRoom && !memcmp(buf, "XRL2", 4) && !memcmp(buf + 4, g_roomKey, 16)) ToGuest(buf + 20, (uint32_t)n - 20);
   }
 }
 void RelayStart() {
@@ -63,8 +72,9 @@ void RelayStart() {
   if (getaddrinfo(host, ps, &hints, &res) != 0 || !res) { Log("[net] relay %s: cannot resolve", r); return; }
   memcpy(&g_relayAddr, res->ai_addr, sizeof g_relayAddr); freeaddrinfo(res);
   g_relay = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP); g_relayOn = true; plat::ThreadSpawn(RelayThread, nullptr);
-  if (const char* g = getenv("XBOX_GUEST_IP")) { in_addr a; if (inet_pton(AF_INET, g, &a) == 1) kGuestIp = ntohl(a.s_addr); }
-  Log("[net] LAN relay %s up, guest IP %u.%u.%u.%u", r, kGuestIp >> 24, (kGuestIp >> 16) & 255, (kGuestIp >> 8) & 255, kGuestIp & 255);
+  if (const char* room = getenv("XBOX_RELAY_ROOM")) if (*room) MakeRoomKey(room);
+  if (const char* g = getenv("XBOX_GUEST_IP")) { in_addr a; if (inet_pton(AF_INET, g, &a) == 1) { kGuestIp = ntohl(a.s_addr); g_ipExplicit = true; } }
+  Log("[net] LAN relay %s up%s, guest IP %u.%u.%u.%u%s", r, g_relayRoom ? " (room set)" : " (no room)", kGuestIp >> 24, (kGuestIp >> 16) & 255, (kGuestIp >> 8) & 255, kGuestIp & 255, g_ipExplicit ? "" : " (chosen from the console address when it asks for one)");
 }
 
 
@@ -100,6 +110,7 @@ void HandleDhcp(const uint8_t* d, uint32_t len) {
   if (len < 240 || d[0] != 1) return; uint8_t type = 0; const uint8_t* o = d + 240;
   while (o < d + len && *o != 255) { if (*o == 0) { ++o; continue; } if (*o == 53 && o[1] == 1) type = o[2]; o += 2 + o[1]; }
   if (type != 1 && type != 3) return;   // Discover / Request
+  if (g_relayOn && !g_ipExplicit) kGuestIp = 0x0A000200u | (16u + (d[28 + 4] * 31u + d[28 + 5]) % 224u);   // on a relay every console needs its own address: derive it from the console's address (chaddr) unless XBOX_GUEST_IP says otherwise
   NL("DHCP %s", type == 1 ? "discover" : "request");
   std::vector<uint8_t> r(300, 0); r[0] = 2; r[1] = 1; r[2] = 6; memcpy(&r[4], d + 4, 4); memcpy(&r[10], d + 10, 2); Wr32(&r[16], kGuestIp); Wr32(&r[20], kGwIp); memcpy(&r[28], d + 28, 6);
   Wr32(&r[236], 0x63825363); uint8_t* p = &r[240];

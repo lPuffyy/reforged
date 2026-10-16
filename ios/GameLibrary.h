@@ -39,8 +39,16 @@
 @interface RFSettings : NSObject
 + (NSInteger)touchMode;                  // 0 automatic (hide when a controller is connected), 1 always show, 2 always hide
 + (void)setTouchMode:(NSInteger)mode;
++ (NSInteger)renderScale;                // 1 original resolution, 2 or 3 times that (smoother edges, heavier)
++ (void)setRenderScale:(NSInteger)scale;
 + (BOOL)showFps;                        // an on-screen frame counter while the game runs
 + (void)setShowFps:(BOOL)on;
++ (BOOL)relayEnabled;                   // System Link over the Internet through a relay server
++ (void)setRelayEnabled:(BOOL)on;
++ (NSString*)relayServer;                // host or host:port (default port 3075)
++ (void)setRelayServer:(NSString*)server;
++ (NSString*)relayRoom;                  // everyone who plays together uses the same room name
++ (void)setRelayRoom:(NSString*)room;
 + (BOOL)diagnostics;                     // save occasional frame captures and detailed logs (help when reporting a problem)
 + (void)setDiagnostics:(BOOL)on;
 + (void)applyToEnvironment;

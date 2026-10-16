@@ -46,16 +46,22 @@ Open `*-personal.ipa` with your sideloading tool and install it, as you would an
 - [Sideloadly](https://sideloadly.io) (a desktop app; you reinstall every 7 days with a free Apple ID)
 
 ### 5. Give the app your disc image
-Pick one:
-- **Copy it into the app's folder.** In Finder (macOS, device selected, Files tab) or iTunes (Windows) file sharing, or on the device in the Files app
-  under *On My iPhone > Reforged*, copy the `.iso` in. Any file name works as long as it ends in `.iso`; if there are several, the first by name is used.
-  Copying a large file takes a while; wait for it to finish before opening the app.
-- **Choose it in the app.** If the app has no disc yet it shows a **Choose disc image** button; pick the file with the Files picker. The app remembers
-  the choice and reads the file in place (no copy). If your `.iso` appears greyed out in the picker, use the copy method instead and tell us your iOS version.
+When you open the app it shows your **library**: the games inside this copy of the app, each with its icon, title and a line about its disc image. Pick one:
+- **Copy it into the app's folder.** In Finder (macOS, device selected, Files tab) or iTunes (Windows) file sharing, or on the device in the Files app under
+  *On My iPhone > Reforged*, copy the `.iso` in. Any file name works as long as it ends in `.iso` or `.xiso`; the app recognises which game it belongs to by looking
+  inside it. Copying a large file takes a while; wait for it to finish before opening the app.
+- **Choose it in the app.** Tap the **(i)** button next to the game. *Open in place* uses the file where it is (nothing is copied; the app remembers it).
+  *Copy into the app* makes a copy inside the app (needs free space for a second copy) and works even when the picker greys the file out. If the file you pick is
+  not this game's disc, the app says so.
 
 ### 6. Play
-Open the app. It starts the game straight away. The first minutes are slower while shader and pipeline caches are built and saved
-(`pipeline_cache.bin` in the app's folder); later launches start faster.
+Tap the game. The first minutes are slower while shader and pipeline caches are built and saved (`pipeline_cache.bin` in the game's folder); later launches start faster.
+To play a different game, close the app and open it again (the runtime can only run one game per start).
+
+### Adding more games
+The companion can add a game to an app you already have: run it with `--add-to <your personal app file>` and the new game's disc image. The games already in the app
+stay, and you install the result over the old app. Each game keeps its own saves and settings in `Games/<id>/` inside the app's folder, and a single-game app made by an
+older companion is converted automatically the first time you add a game to it (its saves stay with it). Each game adds about 130 MB to the app.
 
 ## Controls
 Touch controls fill the screen, laid out like a controller:
@@ -63,14 +69,28 @@ Touch controls fill the screen, laid out like a controller:
 - **A B X Y** on the right, **LT** and **RT** (triggers) at the top corners, **WHT** and **BLK** (the two shoulder-style buttons), **BACK** and **START** at the bottom centre.
 - Short taps press buttons; the sticks work by dragging.
 
-Hardware controllers are not supported yet.
+**Physical controllers** (Xbox, PlayStation, and other MFi-compatible pads) work: connect one in iOS Settings > Bluetooth and the on-screen controls hide automatically; they come back when the controller disconnects. You can change this in the app's Settings (*Automatic*, *Always show*, *Always hide*). The shoulder buttons are the original pad's white and black buttons.
 
-## Settings and diagnostics
+## Settings
+Tap **Settings** in the library:
+- **On-screen controls:** automatic, always show, or always hide.
+- **Display:** a frame-rate counter (top left while a game runs) and **render resolution** (1x, 2x, 3x). Higher resolutions draw the game larger and scale it down, which
+  smooths jagged edges (it works like supersampling antialiasing) but uses more battery and may lower the frame rate. It applies the next time a game starts.
+- **System Link over the Internet:** relay server and room name (see below).
+- **Diagnostics:** saves occasional frame captures and detailed logs (turn it on when asked to report a problem).
+
+## System Link over the Internet
+The game's own System Link feature can run over the Internet through a relay server that one of the players hosts. In Settings, turn on *Use a relay server* and enter
+the relay's address and a room name that everyone who plays together shares, then use the game's System Link menu. Setting up the relay and the safety notes are in
+[RELAY.md](RELAY.md). This is early and has been tested between two copies of the runtime on a computer, not yet on a phone.
+
+## Files and diagnostics
 The app writes these files into its folder (visible in the Files app):
 | File | What |
 |---|---|
 | `reforged.log` | What the runtime did: start-up, errors, a line per second with frame rate and draw counts. **Attach it when you report a problem.** |
-| `pipeline_cache.bin` | GPU pipeline cache. Safe to delete (it is rebuilt, with a slow first minute). |
+| `Games/<id>/` | One folder per game: its virtual disk, saves, console identity, `pipeline_cache.bin` and any diagnostic captures. |
+| `pipeline_cache.bin` | GPU pipeline cache (inside each game's folder). Safe to delete (it is rebuilt, with a slow first minute). |
 | `frame_*.bmp` | Occasional captured frames (every 2400 frames and whenever the screen suddenly goes black). Safe to delete. |
 | `tex*.bmp` | Small debug texture dumps. Safe to delete. |
 | `reforged.env` | **You create this.** Lines of `NAME=value` set runtime options before the game starts; lines starting with `#` are comments. The log tells you whether it was found. |
@@ -99,9 +119,9 @@ This is a preview. Things you should expect:
 - Some visual effects are still wrong on the phone's graphics path (occasional black or too-bright areas in some places, and a few missing post-processing effects).
 - Not every part of the test title has been played; some levels may hang or crash. Please report them with `reforged.log`.
 - Frame rate is limited by the game itself (30 frames per second); dips happen when new textures load.
-- Only one game can be installed per personal app for now (a multi-game library is planned; see [COMPANION.md](COMPANION.md)).
-- Online play is not available.
-- The disc picker may not let you select some files on some iOS versions; the copy method always works.
+- A game runs once per app start; to switch games, close the app and open it again.
+- Official online play is not available. System Link over the Internet through a relay is early (see [RELAY.md](RELAY.md)).
+- The file picker may grey out the disc image for some storage locations; use *Copy into the app* or copy the file with the Files app. If the picker fails the app tells you why (that message is useful in a report).
 
 ## Troubleshooting
 | Symptom | What to do |
@@ -111,7 +131,7 @@ This is a preview. Things you should expect:
 | The download step fails | Check your connection; run again. To use a file you already have: `--ipa <app file>` and `--toolchain <unpacked folder>`. |
 | The build step fails | Make sure there are 10 GB free, and run again; send the last lines of the tool's output (never the disc image or the generated files). |
 | The sideloading tool says the app is invalid | The personal app must be installed exactly as written (do not unzip or rename it); try another sideloading tool. |
-| The app shows "no disc image yet" | Do step 5. |
+| A game shows "no disc image yet" | Do step 5. |
 | The app opens and closes | Open the Files app, copy out `reforged.log` and read the last lines; attach it when reporting. |
 
 ## Compatibility reports

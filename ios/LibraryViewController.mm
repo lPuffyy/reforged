@@ -135,13 +135,21 @@
 // Sections: 0 on-screen controls, 1 display, 2 diagnostics, 3 about
 @implementation SettingsViewController
 
-- (NSInteger)numberOfSectionsInTableView:(UITableView*)tv { return 4; }
-- (NSInteger)tableView:(UITableView*)tv numberOfRowsInSection:(NSInteger)s { return s == 0 ? 3 : (s == 1 ? 1 : (s == 2 ? 1 : 2)); }
-- (NSString*)tableView:(UITableView*)tv titleForHeaderInSection:(NSInteger)s { return @[@"On-screen controls", @"Display", @"Diagnostics", @"About"][s]; }
+- (void)relayChanged:(UISwitch*)sw { [RFSettings setRelayEnabled:sw.on]; [self.delegate settingsChanged]; }
+- (BOOL)textFieldShouldReturn:(UITextField*)tf { [tf resignFirstResponder]; return YES; }
+- (void)textFieldDidEndEditing:(UITextField*)tf {
+  if (tf.tag == 1) [RFSettings setRelayServer:tf.text ?: @""]; else if (tf.tag == 2) [RFSettings setRelayRoom:tf.text ?: @""];
+  [self.delegate settingsChanged];
+}
+
+- (NSInteger)numberOfSectionsInTableView:(UITableView*)tv { return 5; }
+- (NSInteger)tableView:(UITableView*)tv numberOfRowsInSection:(NSInteger)s { return s == 0 ? 3 : (s == 1 ? 4 : (s == 2 ? 3 : (s == 3 ? 1 : 2))); }
+- (NSString*)tableView:(UITableView*)tv titleForHeaderInSection:(NSInteger)s { return @[@"On-screen controls", @"Display", @"System Link over the Internet", @"Diagnostics", @"About"][s]; }
 - (NSString*)tableView:(UITableView*)tv titleForFooterInSection:(NSInteger)s {
   if (s == 0) return @"Automatic hides the on-screen controls while a physical controller is connected and shows them again when it is gone.";
-  if (s == 1) return @"The frame counter appears in the top left corner while a game runs.";
-  if (s == 2) return @"Saves a few frame images and a detailed log now and then (and whenever the picture suddenly goes black). Turn it on when you are asked to report a problem; the files appear in this app's folder.";
+  if (s == 1) return @"Render resolution draws the game at a multiple of its original size and scales it down, which smooths jagged edges (it works like supersampling antialiasing) but uses more battery and can lower the frame rate; changes apply the next time a game starts. The frame counter appears in the top left corner while a game runs.";
+  if (s == 2) return @"Connects to a relay server so System Link games work over the Internet. Everyone who plays together enters the same server address and the same room name, then uses the game's own System Link menu. Nothing is encrypted: use a private room name and play with people you trust. Applies the next time a game starts.";
+  if (s == 3) return @"Saves a few frame images and a detailed log now and then (and whenever the picture suddenly goes black). Turn it on when you are asked to report a problem; the files appear in this app's folder.";
   return nil;
 }
 
@@ -151,11 +159,30 @@
     NSArray* names = @[@"Automatic", @"Always show", @"Always hide"];
     c.textLabel.text = names[ip.row];
     c.accessoryType = [RFSettings touchMode] == ip.row ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
-  } else if (ip.section == 1) {
+  } else if (ip.section == 1 && ip.row == 0) {
     c.textLabel.text = @"Show frame rate";
     UISwitch* sw = [UISwitch new]; sw.on = [RFSettings showFps]; [sw addTarget:self action:@selector(fpsChanged:) forControlEvents:UIControlEventValueChanged];
     c.accessoryView = sw; c.selectionStyle = UITableViewCellSelectionStyleNone;
+  } else if (ip.section == 1) {
+    NSArray* names = @[@"Original resolution (1x)", @"2x (smoother edges)", @"3x (smoothest, heaviest)"];
+    c.textLabel.text = names[ip.row - 1];
+    c.accessoryType = [RFSettings renderScale] == ip.row ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
   } else if (ip.section == 2) {
+    if (ip.row == 0) {
+      c.textLabel.text = @"Use a relay server";
+      UISwitch* sw = [UISwitch new]; sw.on = [RFSettings relayEnabled]; [sw addTarget:self action:@selector(relayChanged:) forControlEvents:UIControlEventValueChanged];
+      c.accessoryView = sw;
+    } else {
+      BOOL server = ip.row == 1;
+      c.textLabel.text = server ? @"Server" : @"Room";
+      UITextField* tf = [[UITextField alloc] initWithFrame:CGRectMake(0, 0, 260, 32)];
+      tf.textAlignment = NSTextAlignmentRight; tf.autocapitalizationType = UITextAutocapitalizationTypeNone; tf.autocorrectionType = UITextAutocorrectionTypeNo;
+      tf.placeholder = server ? @"relay.example.com:3075" : @"a private room name"; tf.text = server ? [RFSettings relayServer] : [RFSettings relayRoom];
+      tf.tag = server ? 1 : 2; tf.returnKeyType = UIReturnKeyDone; tf.delegate = self; tf.keyboardType = server ? UIKeyboardTypeURL : UIKeyboardTypeDefault;
+      c.accessoryView = tf;
+    }
+    c.selectionStyle = UITableViewCellSelectionStyleNone;
+  } else if (ip.section == 3) {
     c.textLabel.text = @"Save diagnostic captures";
     UISwitch* sw = [UISwitch new]; sw.on = [RFSettings diagnostics]; [sw addTarget:self action:@selector(diagChanged:) forControlEvents:UIControlEventValueChanged];
     c.accessoryView = sw; c.selectionStyle = UITableViewCellSelectionStyleNone;
@@ -171,10 +198,15 @@
 
 - (void)tableView:(UITableView*)tv didSelectRowAtIndexPath:(NSIndexPath*)ip {
   [tv deselectRowAtIndexPath:ip animated:YES];
-  if (ip.section != 0) return;
-  [RFSettings setTouchMode:ip.row];
-  [tv reloadSections:[NSIndexSet indexSetWithIndex:0] withRowAnimation:UITableViewRowAnimationNone];
-  [self.delegate settingsChanged];
+  if (ip.section == 0) {
+    [RFSettings setTouchMode:ip.row];
+    [tv reloadSections:[NSIndexSet indexSetWithIndex:0] withRowAnimation:UITableViewRowAnimationNone];
+    [self.delegate settingsChanged];
+  } else if (ip.section == 1 && ip.row >= 1) {
+    [RFSettings setRenderScale:ip.row];
+    [tv reloadSections:[NSIndexSet indexSetWithIndex:1] withRowAnimation:UITableViewRowAnimationNone];
+    [self.delegate settingsChanged];
+  }
 }
 
 - (void)fpsChanged:(UISwitch*)sw { [RFSettings setShowFps:sw.on]; [self.delegate settingsChanged]; }

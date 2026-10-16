@@ -60,7 +60,7 @@ float Fl(uint32_t u) { float f; memcpy(&f, &u, 4); return f; }
 
 struct Buf { VkBuffer b = VK_NULL_HANDLE; VkDeviceMemory m = VK_NULL_HANDLE; uint8_t* map = nullptr; size_t size = 0; };
 struct Img { VkImage img = VK_NULL_HANDLE; VkDeviceMemory mem = VK_NULL_HANDLE; VkImageView view = VK_NULL_HANDLE; int w = 0, h = 0; VkFormat fmt = VK_FORMAT_UNDEFINED; VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED; };
-struct RenderTarget { uint32_t key = 0; int w = 0, h = 0; Img color; Img* dp = nullptr; Img& depth() { return *dp; } bool depthCleared = false; uint32_t offset = 0; uint64_t lastWrite = 0; uint32_t zeta = 0; uint64_t lastDepthWrite = 0; };
+struct RenderTarget { uint32_t key = 0; int w = 0, h = 0; int pw = 0, ph = 0;   /* w, h: the size the title asked for; pw, ph: the image size (w, h times the render scale) */ Img color; Img* dp = nullptr; Img& depth() { return *dp; } bool depthCleared = false; uint32_t offset = 0; uint64_t lastWrite = 0; uint32_t zeta = 0; uint64_t lastDepthWrite = 0; };
 struct Frame {
   VkCommandPool pool = VK_NULL_HANDLE; VkCommandBuffer cb = VK_NULL_HANDLE; VkFence fence = VK_NULL_HANDLE; VkSemaphore imageAvail = VK_NULL_HANDLE, renderDone = VK_NULL_HANDLE;
   Buf ring; size_t ringOff = 0; VkDescriptorPool dpool = VK_NULL_HANDLE; bool recording = false, submitted = false; std::vector<std::function<void()>> deferred;
@@ -258,21 +258,25 @@ bool UploadTexture(int stage, TexEntry** out) {
 }
 
 // ---------------- render targets ----------------
+// XBOX_RES_SCALE=<1..4>: render at a multiple of the title's resolution. Images are allocated at the scaled size; viewports, scissors and clear rectangles are scaled;
+// the title still sees its own sizes (texture-size constants, dumps of "logical" sizes). The picture is scaled down smoothly when it is shown, which also smooths edges.
+static float ResScale() { static float v = [] { const char* e = getenv("XBOX_RES_SCALE"); float f = e ? (float)atof(e) : 1.f; return f < 1.f ? 1.f : (f > 4.f ? 4.f : f); }(); return v; }
+static int Sc(int v) { return (int)(v * ResScale() + 0.5f); }
 struct ZWriters { RenderTarget* cur = nullptr; RenderTarget* other = nullptr; }; static std::map<uint32_t, ZWriters> g_zWriters;   // per depth buffer address: the last colour surface that wrote it this frame, and the one before
 static std::map<uint64_t, Img*> g_sharedDepth;   // depth images by (zeta address, size)
 static Img* SharedDepth(int w, int h) {
   uint64_t dk = (uint64_t)R(0x214) << 32 | (uint32_t)(w << 16 | h); auto sd = g_sharedDepth.find(dk);
-  if (sd == g_sharedDepth.end()) sd = g_sharedDepth.emplace(dk, new Img(MakeImg(w, h, VK_FORMAT_D32_SFLOAT, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, VK_IMAGE_ASPECT_DEPTH_BIT))).first;
+  if (sd == g_sharedDepth.end()) sd = g_sharedDepth.emplace(dk, new Img(MakeImg(Sc(w), Sc(h), VK_FORMAT_D32_SFLOAT, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, VK_IMAGE_ASPECT_DEPTH_BIT))).first;
   return sd->second;
 }
 RenderTarget* GetRT(int w, int h) {
   uint32_t key = (uint32_t)(w << 16 | h) ^ (R(0x210) * 2654435761u);
   // A colour surface keeps one render target; its depth image follows the depth buffer address in use (targets that name the same address share it, as on the console)
   for (auto* r : g_rts) if (r->key == key) { Img* d = SharedDepth(w, h); if (r->dp != d) { if (g_rt == r) EndRendering(); r->dp = d; } return r; }
-  RenderTarget* rt = new RenderTarget; rt->key = key; rt->w = w; rt->h = h; rt->offset = R(0x210);
-  rt->color = MakeImg(w, h, VK_FORMAT_B8G8R8A8_UNORM, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+  RenderTarget* rt = new RenderTarget; rt->key = key; rt->w = w; rt->h = h; rt->pw = Sc(w); rt->ph = Sc(h); rt->offset = R(0x210);
+  rt->color = MakeImg(rt->pw, rt->ph, VK_FORMAT_B8G8R8A8_UNORM, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
   rt->dp = SharedDepth(w, h);
-  g_rts.push_back(rt); Log("[vk] render target %dx%d (key %08x)", w, h, key); return rt;
+  g_rts.push_back(rt); Log("[vk] render target %dx%d (image %dx%d, key %08x)", w, h, rt->pw, rt->ph, key); return rt;
 }
 bool SurfaceDims(int* x, int* y, int* w, int* h) {
   uint32_t ch = R(0x200), cv = R(0x204); *x = ch & 0xFFFF; *y = cv & 0xFFFF; *w = ch >> 16; *h = cv >> 16;
@@ -291,11 +295,11 @@ RenderTarget* FindRTByZeta(uint32_t off) {
 std::map<uint32_t, Img> g_depthSnap;   // key: w<<16|h
 Img* SnapshotDepth(RenderTarget* src) {
   VkCommandBuffer cb = F().cb; uint32_t key = (uint32_t)(src->w << 16 | src->h); auto it = g_depthSnap.find(key);
-  if (it == g_depthSnap.end()) it = g_depthSnap.emplace(key, MakeImg(src->w, src->h, VK_FORMAT_D32_SFLOAT, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_IMAGE_ASPECT_DEPTH_BIT)).first;
+  if (it == g_depthSnap.end()) it = g_depthSnap.emplace(key, MakeImg(src->pw, src->ph, VK_FORMAT_D32_SFLOAT, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_IMAGE_ASPECT_DEPTH_BIT)).first;
   Img& dst = it->second; EndRendering();
   Barrier(cb, src->depth(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_ASPECT_DEPTH_BIT, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
   Barrier(cb, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_ASPECT_DEPTH_BIT, VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
-  VkImageCopy ic{}; ic.srcSubresource = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1}; ic.dstSubresource = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1}; ic.extent = {(uint32_t)src->w, (uint32_t)src->h, 1};
+  VkImageCopy ic{}; ic.srcSubresource = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1}; ic.dstSubresource = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1}; ic.extent = {(uint32_t)src->pw, (uint32_t)src->ph, 1};
   vkCmdCopyImage(cb, src->depth().img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst.img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &ic);
   Barrier(cb, dst, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_DEPTH_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
   return &dst;
@@ -304,11 +308,11 @@ Img* SnapshotDepth(RenderTarget* src) {
 std::map<uint32_t, Img> g_colorSnap;   // key: w<<16|h
 Img* SnapshotColor(RenderTarget* src) {
   VkCommandBuffer cb = F().cb; uint32_t key = (uint32_t)(src->w << 16 | src->h); auto it = g_colorSnap.find(key);
-  if (it == g_colorSnap.end()) it = g_colorSnap.emplace(key, MakeImg(src->w, src->h, VK_FORMAT_B8G8R8A8_UNORM, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_IMAGE_ASPECT_COLOR_BIT)).first;
+  if (it == g_colorSnap.end()) it = g_colorSnap.emplace(key, MakeImg(src->pw, src->ph, VK_FORMAT_B8G8R8A8_UNORM, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_IMAGE_ASPECT_COLOR_BIT)).first;
   Img& dst = it->second; EndRendering();
   Barrier(cb, src->color, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
   Barrier(cb, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
-  VkImageCopy ic{}; ic.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}; ic.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}; ic.extent = {(uint32_t)src->w, (uint32_t)src->h, 1};
+  VkImageCopy ic{}; ic.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}; ic.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}; ic.extent = {(uint32_t)src->pw, (uint32_t)src->ph, 1};
   vkCmdCopyImage(cb, src->color.img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst.img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &ic);
   Barrier(cb, dst, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
   return &dst;
@@ -322,7 +326,7 @@ void BeginRendering(RenderTarget* rt) {
   if (rt->depth().layout != VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL) Barrier(cb, rt->depth(), VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, VK_IMAGE_ASPECT_DEPTH_BIT, 0, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT);
   VkRenderingAttachmentInfo ca{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO}; ca.imageView = rt->color.view; ca.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL; ca.loadOp = colorFresh ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD; ca.storeOp = VK_ATTACHMENT_STORE_OP_STORE; ca.clearValue.color = {{0, 0, 0, 1}};
   VkRenderingAttachmentInfo da{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO}; da.imageView = rt->depth().view; da.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL; da.loadOp = depthFresh ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD; da.storeOp = VK_ATTACHMENT_STORE_OP_STORE; da.clearValue.depthStencil = {1.f, 0};
-  VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO}; ri.renderArea = {{0, 0}, {(uint32_t)rt->w, (uint32_t)rt->h}}; ri.layerCount = 1; ri.colorAttachmentCount = 1; ri.pColorAttachments = &ca; ri.pDepthAttachment = &da;
+  VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO}; ri.renderArea = {{0, 0}, {(uint32_t)rt->pw, (uint32_t)rt->ph}}; ri.layerCount = 1; ri.colorAttachmentCount = 1; ri.pColorAttachments = &ca; ri.pDepthAttachment = &da;
   vkCmdBeginRendering(cb, &ri); g_rendering = true;
 }
 
@@ -403,8 +407,8 @@ static void ClearColourChannels(RenderTarget* rt, uint32_t cm, uint32_t colorVal
   pk.colorMask = ((cm & 0x10) ? 0x00010000u : 0u) | ((cm & 0x20) ? 0x100u : 0u) | ((cm & 0x40) ? 1u : 0u) | ((cm & 0x80) ? 0x01000000u : 0u);
   VkPipeline pipe = GetPipeline(pk, vs, fs); VkCommandBuffer cb = F().cb;
   vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
-  VkViewport vpt{0.f, 0.f, (float)rt->w, (float)rt->h, 0.f, 1.f}; vkCmdSetViewport(cb, 0, 1, &vpt);
-  VkRect2D sc{{std::max(0, x0), std::max(0, y0)}, {(uint32_t)std::max(1, x1 - x0 + 1), (uint32_t)std::max(1, y1 - y0 + 1)}}; vkCmdSetScissor(cb, 0, 1, &sc);
+  VkViewport vpt{0.f, 0.f, (float)rt->pw, (float)rt->ph, 0.f, 1.f}; vkCmdSetViewport(cb, 0, 1, &vpt);
+  VkRect2D sc{{Sc(std::max(0, x0)), Sc(std::max(0, y0))}, {(uint32_t)std::max(1, Sc(x1 + 1) - Sc(x0)), (uint32_t)std::max(1, Sc(y1 + 1) - Sc(y0))}}; vkCmdSetScissor(cb, 0, 1, &sc);
   float bc[4] = {0, 0, 0, 0}; vkCmdSetBlendConstants(cb, bc);
   vkCmdDraw(cb, 3, 1, 0, 0);
 }
@@ -423,7 +427,7 @@ void GpuClear(uint32_t mask, uint32_t colorValue, uint32_t zValue, int x0, int y
   if ((mask & 0x70) == 0x70) { ca[n].aspectMask = VK_IMAGE_ASPECT_COLOR_BIT; ca[n].colorAttachment = 0; ca[n].clearValue.color = {{((colorValue >> 16) & 255) / 255.f, ((colorValue >> 8) & 255) / 255.f, (colorValue & 255) / 255.f, (colorValue >> 24) / 255.f}}; n++; }
   if (mask & 0x3) { uint32_t zfmt = (R(0x208) >> 4) & 0xF; float d = zfmt == 1 ? (zValue & 0xFFFF) / 65535.f : (zValue >> 8) / 16777215.f; ca[n].aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT; ca[n].clearValue.depthStencil = {d, 0}; n++; }
   if (!n) return;
-  VkClearRect cr{{{x0, y0}, {(uint32_t)std::max(1, x1 - x0 + 1), (uint32_t)std::max(1, y1 - y0 + 1)}}, 0, 1};
+  VkClearRect cr{{{Sc(x0), Sc(y0)}, {(uint32_t)std::max(1, Sc(x1 + 1) - Sc(x0)), (uint32_t)std::max(1, Sc(y1 + 1) - Sc(y0))}}, 0, 1};
   vkCmdClearAttachments(F().cb, n, ca, 1, &cr);
 }
 
@@ -624,7 +628,7 @@ static void GpuDrawImpl(uint32_t prim, const SoftVertex* verts, size_t n) {
   BeginRendering(rt); TR("[vk] draw: rendering begun"); VkCommandBuffer cb = fr.cb;
   vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
   uint32_t dyn[2] = {(uint32_t)vuOff, (uint32_t)fuOff}; vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, g_playout, 0, 1, &ds, 2, dyn);
-  VkViewport vpt{(float)sx, (float)sy, (float)sw, (float)sh, 0.f, 1.f}; vkCmdSetViewport(cb, 0, 1, &vpt); VkRect2D sc{{sx, sy}, {(uint32_t)sw, (uint32_t)sh}}; vkCmdSetScissor(cb, 0, 1, &sc);
+  VkViewport vpt{(float)Sc(sx), (float)Sc(sy), (float)Sc(sw), (float)Sc(sh), 0.f, 1.f}; vkCmdSetViewport(cb, 0, 1, &vpt); VkRect2D sc{{Sc(sx), Sc(sy)}, {(uint32_t)Sc(sw), (uint32_t)Sc(sh)}}; vkCmdSetScissor(cb, 0, 1, &sc);
   float bc[4]; argb(R(0x34C), bc); vkCmdSetBlendConstants(cb, bc);
   VkBuffer vb = fr.ring.b; VkDeviceSize vo = voff; vkCmdBindVertexBuffers(cb, 0, 1, &vb, &vo); vkCmdBindIndexBuffer(cb, fr.ring.b, ioff, VK_INDEX_TYPE_UINT32);
   TR("[vk] draw: recording indexed draw of %zu indices", idx.size());
@@ -691,9 +695,9 @@ static void GpuFlipImpl() {
   Img& rtc = g_rt->color; Barrier(cb, rtc, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
   VkImageMemoryBarrier sb{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER}; sb.oldLayout = g_swapLayouts[ix]; sb.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL; sb.srcQueueFamilyIndex = sb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED; sb.image = g_swapImages[ix];
   sb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}; sb.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT; vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &sb);
-  VkImageBlit bl{}; bl.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}; bl.srcOffsets[1] = {g_rt->w, g_rt->h, 1}; bl.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}; bl.dstOffsets[1] = {(int)g_swapExtent.width, (int)g_swapExtent.height, 1};
+  VkImageBlit bl{}; bl.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}; bl.srcOffsets[1] = {g_rt->pw, g_rt->ph, 1}; bl.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}; bl.dstOffsets[1] = {(int)g_swapExtent.width, (int)g_swapExtent.height, 1};
   vkCmdBlitImage(cb, rtc.img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, g_swapImages[ix], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bl, VK_FILTER_LINEAR);
-  const uint8_t* lumPtr = nullptr; int lumW = g_rt->w, lumH = g_rt->h; static bool lumOn = getenv("XBOX_LUMLOG") != nullptr; static const bool darkWatch = getenv("XBOX_DARKWATCH") != nullptr; const bool darkNow = darkWatch && g_dbgFlips % 15 == 0 && g_darkArm < 0;   // XBOX_LUMLOG=1: read the presented image back and log its mean brightness per flip (with the draw cap), for automated bisection
+  const uint8_t* lumPtr = nullptr; int lumW = g_rt->pw, lumH = g_rt->ph; static bool lumOn = getenv("XBOX_LUMLOG") != nullptr; static const bool darkWatch = getenv("XBOX_DARKWATCH") != nullptr; const bool darkNow = darkWatch && g_dbgFlips % 15 == 0 && g_darkArm < 0;   // XBOX_LUMLOG=1: read the presented image back and log its mean brightness per flip (with the draw cap), for automated bisection
   if (lumOn || darkNow) { uint8_t* dst; size_t off = RingAlloc((size_t)lumW * lumH * 4, 16, &dst); VkBufferImageCopy bc{}; bc.bufferOffset = off; bc.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}; bc.imageExtent = {(uint32_t)lumW, (uint32_t)lumH, 1}; vkCmdCopyImageToBuffer(cb, rtc.img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, fr.ring.b, 1, &bc); lumPtr = dst; }
   if (g_pcache && g_dbgFlips > 0 && g_dbgFlips % 600 == 0) {   // write the pipeline cache back when it has grown
     size_t sz = 0; if (vkGetPipelineCacheData(g_dev, g_pcache, &sz, nullptr) == VK_SUCCESS && sz > g_pcacheSaved + 4096) {
@@ -702,9 +706,9 @@ static void GpuFlipImpl() {
   }
   std::vector<DumpReq> dumpReqs;
   if (!FrameDumpDue(g_dbgFlips) && g_dbgFlips > 0 && g_dbgFlips % 300 == 0 && g_dbgFlips <= 12000) {   // always on: the presented image's mean colour every 300 flips (a black screen shows up in the log)
-    uint8_t* dst; size_t off = RingAlloc((size_t)g_rt->w * g_rt->h * 4, 16, &dst);
-    VkBufferImageCopy bc{}; bc.bufferOffset = off; bc.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}; bc.imageExtent = {(uint32_t)g_rt->w, (uint32_t)g_rt->h, 1};
-    vkCmdCopyImageToBuffer(cb, rtc.img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, fr.ring.b, 1, &bc); dumpReqs.push_back({dst, g_rt->w, g_rt->h, 0, false});
+    uint8_t* dst; size_t off = RingAlloc((size_t)g_rt->pw * g_rt->ph * 4, 16, &dst);
+    VkBufferImageCopy bc{}; bc.bufferOffset = off; bc.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}; bc.imageExtent = {(uint32_t)g_rt->pw, (uint32_t)g_rt->ph, 1};
+    vkCmdCopyImageToBuffer(cb, rtc.img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, fr.ring.b, 1, &bc); dumpReqs.push_back({dst, g_rt->pw, g_rt->ph, 0, false});
   }
   if (FrameDumpDue(g_dbgFlips)) {
     auto grab = [&](Img& im, int w, int h, int n, bool inTransferSrc) {
@@ -717,10 +721,10 @@ static void GpuFlipImpl() {
       if (!inTransferSrc) Barrier(cb, im, orig, VK_IMAGE_ASPECT_COLOR_BIT, VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
       dumpReqs.push_back({dst, w, h, n, true});
     };
-    grab(rtc, g_rt->w, g_rt->h, 0, true);
+    grab(rtc, g_rt->pw, g_rt->ph, 0, true);
     std::vector<RenderTarget*> others; for (auto* r : g_rts) if (r != g_rt && r->lastWrite && r->color.img && r->w * r->h <= 1280 * 960) others.push_back(r);
     std::sort(others.begin(), others.end(), [](RenderTarget* x, RenderTarget* y) { return x->lastWrite > y->lastWrite; });
-    for (size_t i = 0; i < others.size() && i < 5; i++) grab(others[i]->color, others[i]->w, others[i]->h, (int)i + 1, false);
+    for (size_t i = 0; i < others.size() && i < 5; i++) grab(others[i]->color, others[i]->pw, others[i]->ph, (int)i + 1, false);
   }
   sb.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL; sb.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR; sb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT; sb.dstAccessMask = 0;
   vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1, &sb); g_swapLayouts[ix] = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;

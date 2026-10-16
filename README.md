@@ -13,6 +13,7 @@ the phone's GPU path, and some levels untested. See **[docs/USAGE.md](docs/USAGE
 | **Sideload** the app (install it without the App Store) | [AltStore guide](https://faq.altstore.io), [SideStore guide](https://docs.sidestore.io), [Sideloadly](https://sideloadly.io) |
 | See **what has been tested** | [Compatibility list](https://github.com/lPuffyy/reforged-compat) |
 | **Compile** the runtime, the iOS app or the companion myself | [docs/BUILDING.md](docs/BUILDING.md) |
+| Play **System Link over the Internet** (relay server) | [docs/RELAY.md](docs/RELAY.md) |
 | Understand the **rules** and the legal basis | [docs/LEGAL.md](docs/LEGAL.md) |
 | See how it **works** and what is still open | [docs/COMPANION.md](docs/COMPANION.md), [docs/PORTING.md](docs/PORTING.md) |
 

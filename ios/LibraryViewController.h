@@ -12,6 +12,6 @@
 - (instancetype)initWithGames:(NSArray<RFGame*>*)games documents:(NSString*)docs;
 @end
 
-@interface SettingsViewController : UITableViewController
+@interface SettingsViewController : UITableViewController <UITextFieldDelegate>
 @property(weak, nonatomic) id<RFLibraryDelegate> delegate;
 @end

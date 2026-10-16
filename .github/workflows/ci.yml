@@ -16,6 +16,8 @@ jobs:
           python-version: '3.12'
       - name: No game-derived or private files
         run: python -I tools/check_clean.py
+      - name: System Link relay rules
+        run: python -I tests/relay_test.py
 
   # The portable core on every host we care about: Windows x64, Linux x64, Linux arm64 and Apple Silicon macOS (arm64 is the iOS architecture; it uses
   # sse2neon for the SSE/MMX helpers, and macOS exercises the same Apple toolchain and POSIX paths as iOS).

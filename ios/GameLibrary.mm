@@ -152,14 +152,27 @@ static NSData* DiscExecutable(NSString* path) {
 
 + (NSInteger)touchMode { return [[NSUserDefaults standardUserDefaults] integerForKey:@"touchMode"]; }
 + (void)setTouchMode:(NSInteger)mode { [[NSUserDefaults standardUserDefaults] setInteger:mode forKey:@"touchMode"]; [self applyToEnvironment]; }
++ (NSInteger)renderScale { NSInteger v = [[NSUserDefaults standardUserDefaults] integerForKey:@"renderScale"]; return v < 1 ? 1 : (v > 3 ? 3 : v); }
++ (void)setRenderScale:(NSInteger)scale { [[NSUserDefaults standardUserDefaults] setInteger:scale forKey:@"renderScale"]; [self applyToEnvironment]; }
 + (BOOL)showFps { return [[NSUserDefaults standardUserDefaults] boolForKey:@"showFps"]; }
 + (void)setShowFps:(BOOL)on { [[NSUserDefaults standardUserDefaults] setBool:on forKey:@"showFps"]; }
++ (BOOL)relayEnabled { return [[NSUserDefaults standardUserDefaults] boolForKey:@"relayEnabled"]; }
++ (void)setRelayEnabled:(BOOL)on { [[NSUserDefaults standardUserDefaults] setBool:on forKey:@"relayEnabled"]; [self applyToEnvironment]; }
++ (NSString*)relayServer { return [[NSUserDefaults standardUserDefaults] stringForKey:@"relayServer"] ?: @""; }
++ (void)setRelayServer:(NSString*)server { [[NSUserDefaults standardUserDefaults] setObject:[server stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] forKey:@"relayServer"]; [self applyToEnvironment]; }
++ (NSString*)relayRoom { return [[NSUserDefaults standardUserDefaults] stringForKey:@"relayRoom"] ?: @""; }
++ (void)setRelayRoom:(NSString*)room { [[NSUserDefaults standardUserDefaults] setObject:[room stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] forKey:@"relayRoom"]; [self applyToEnvironment]; }
 + (BOOL)diagnostics { return [[NSUserDefaults standardUserDefaults] boolForKey:@"diagnostics"]; }
 + (void)setDiagnostics:(BOOL)on { [[NSUserDefaults standardUserDefaults] setBool:on forKey:@"diagnostics"]; [self applyToEnvironment]; }
 
 + (void)applyToEnvironment {
   NSInteger t = [self touchMode];
   if (t == 1) setenv("REFORGED_TOUCH", "on", 1); else if (t == 2) setenv("REFORGED_TOUCH", "off", 1); else unsetenv("REFORGED_TOUCH");
+  if ([self renderScale] > 1) setenv("XBOX_RES_SCALE", [[NSString stringWithFormat:@"%ld", (long)[self renderScale]] UTF8String], 1); else unsetenv("XBOX_RES_SCALE");
+  if ([self relayEnabled] && [self relayServer].length) {
+    setenv("XBOX_RELAY", [[self relayServer] UTF8String], 1);
+    if ([self relayRoom].length) setenv("XBOX_RELAY_ROOM", [[self relayRoom] UTF8String], 1); else unsetenv("XBOX_RELAY_ROOM");
+  } else { unsetenv("XBOX_RELAY"); unsetenv("XBOX_RELAY_ROOM"); }
   if ([self diagnostics]) {
     // every 2400 frames, and whenever the picture suddenly goes black: log two frames draw by draw and save their images
     setenv("XBOX_DRAWLOG", "every=2400", 1); setenv("XBOX_FRAMEDUMP", "sync", 1); setenv("XBOX_DARKWATCH", "1", 1); setenv("XBOX_DRAWTEX", "size:103x19", 1);

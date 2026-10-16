@@ -1,0 +1,12 @@
+# Run the relay:  docker compose -f tools/relay/docker-compose.yml up -d --build   (from the repository root)
+# Then forward UDP port 3075 on your router to this machine. See docs/RELAY.md.
+services:
+  relay:
+    build:
+      context: ../..
+      dockerfile: tools/relay/Dockerfile
+    image: reforged-relay
+    restart: unless-stopped
+    ports:
+      - "3075:3075/udp"
+    command: ["--port", "3075", "--max-room", "16", "--max-rooms", "256", "--rate", "600"]

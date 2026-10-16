@@ -40,17 +40,22 @@ the SHA-256 of the program's main executable, with an address and replacement by
 the translated code includes them. A program not in the table is translated unmodified and the tool says so. The file holds hashes, addresses and a few bytes
 only; adding a program means adding its hash and patches after testing it. `--title-data <folder>` overrides any file of the same name.
 
-## Multi-game library (planned)
+## Multi-game library
 Constraint: iOS only runs code that is signed into the app, so every game module must be inside the app bundle when it is sideloaded; nothing can be
 downloaded into the app's folder later.
 
-Plan:
+How it works:
 - **Bundle layout:** `Games/<id>/` per game (module, `title/` files), where `<id>` is the hash of the game's main executable, plus a small `games.json` manifest.
   Single-game apps keep working (a manifest with one entry).
 - **App:** a launch screen lists installed games. Each game has its own disc image (found in the app's Documents folder or picked with the Files picker, remembered
   per game) and its own save and settings folders. The runtime keeps global state and cannot unload a module, so choosing a different game relaunches the app.
-- **Companion:** keeps a cache of built modules keyed by hash; `--add-to <personal ipa>` builds only the new game and repackages everything into one personal app,
-  so the earlier games are not rebuilt. One app instead of one per game keeps the number of sideloaded apps (limited on free Apple IDs) down.
+- **Companion:** `--add-to <personal ipa>` builds only the new game and repackages everything into one personal app, so the earlier games are not rebuilt; an older
+  single-game app is converted to this layout (its saved files are moved into the game's folder the first time the game starts). One app instead of one per game keeps the number of sideloaded apps (limited on free Apple IDs) down.
 - **Costs:** each game adds roughly 130 MB to the installed app, and adding a game means reinstalling the app (saves stay if the app identity is unchanged).
 - **Compatibility:** each new game will need its own testing and patch entries; the table above is per executable hash for that reason.
 
+
+## Game metadata
+The companion reads what a program says about itself from its own executable: the title, title id, regions, version and build date from its certificate, and the
+128x128 title image (`tools/xbe_meta.py`). They are written into `Games/games.json` and `Games/<id>/icon.png` of the personal app and shown in the library. Nothing is
+downloaded. Richer data (cover art, descriptions, release years) would need an online database; that is not implemented and, if it is ever added, would be opt-in.
